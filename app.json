@@ -11,7 +11,7 @@
     "ios": {
       "supportsTablet": true,
       "infoPlist": {
-        "NSCameraUsageDescription": "Capture live face frames to create and verify an on-device face template.",
+        "NSCameraUsageDescription": "Capture live face frames and demo fingertip photos. Fingertip photos are not used to verify identity.",
         "NSMicrophoneUsageDescription": "Record a short voice sample to create and verify an on-device voice template."
       },
       "bundleIdentifier": "com.samuelmoiwa.biomaticdemoapp"
@@ -50,8 +50,14 @@
         "expo-image-picker",
         {
           "photosPermission": "Choose a profile picture to save with a demo user profile.",
-          "cameraPermission": "Capture live face frames for on-device biometric matching.",
+          "cameraPermission": "Capture live face frames and demo fingertip photos. Fingertip photos are not used to verify identity.",
           "microphonePermission": "Record a short voice sample to create and verify an on-device voice template."
+        }
+      ],
+      [
+        "expo-local-authentication",
+        {
+          "faceIDPermission": "Use Face ID to confirm access to this device."
         }
       ],
       "expo-secure-store"

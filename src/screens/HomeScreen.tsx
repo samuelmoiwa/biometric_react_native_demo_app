@@ -169,9 +169,9 @@ export function HomeScreen({
         <View className="mt-6 flex-row items-center rounded-2xl bg-mint/60 p-4">
           <IconTile icon="finger-print-outline" size={38} />
           <View className="ml-3 flex-1">
-            <Text className="text-sm font-bold text-ink">Face and voice matching, on device</Text>
+            <Text className="text-sm font-bold text-ink">Local biometrics, private by design</Text>
             <Text className="mt-1 text-xs leading-4 text-muted">
-              Derived templates are encrypted locally. Fingerprint scanning is not supported.
+              Templates and demo fingertip photos are encrypted locally. Fingertip photos do not authenticate.
             </Text>
           </View>
         </View>

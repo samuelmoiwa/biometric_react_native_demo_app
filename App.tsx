@@ -1,6 +1,6 @@
 import "./global.css";
-import { useEffect, useState } from "react";
-import { ActivityIndicator, Pressable, Text, View } from "react-native";
+import { useEffect, useRef, useState } from "react";
+import { ActivityIndicator, Animated, Pressable, Text, View } from "react-native";
 import { StatusBar } from "expo-status-bar";
 import { Ionicons } from "@expo/vector-icons";
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
@@ -41,6 +41,18 @@ function AppContent() {
   const [hasOnboarded, setHasOnboarded] = useState(false);
   const [isReady, setIsReady] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [tabBarWidth, setTabBarWidth] = useState(0);
+  const tabPosition = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    Animated.spring(tabPosition, {
+      toValue: activeTab === "home" ? 0 : 1,
+      damping: 18,
+      stiffness: 180,
+      mass: 0.8,
+      useNativeDriver: true,
+    }).start();
+  }, [activeTab, tabPosition]);
 
   async function loadApp() {
     setIsReady(false);
@@ -168,21 +180,51 @@ function AppContent() {
         )}
       </View>
       {!selectedProfile && screen !== "add" ? (
-        <View className="h-[76px] flex-row items-center gap-2 border-t border-line bg-white px-4 py-2">
-          <TabButton
-            icon="home-outline"
-            activeIcon="home"
-            label="Home"
-            active={activeTab === "home"}
-            onPress={() => navigate("home")}
-          />
-          <TabButton
-            icon="search-outline"
-            activeIcon="search"
-            label="Find users"
-            active={activeTab === "find"}
-            onPress={() => navigate("find")}
-          />
+        <View className="px-5 pb-2 pt-2">
+          <View
+            onLayout={(event) => setTabBarWidth(event.nativeEvent.layout.width)}
+            className="relative h-[66px] flex-row items-center overflow-hidden rounded-[26px] border border-line bg-white px-2"
+            style={{
+              shadowColor: "#10231F",
+              shadowOffset: { width: 0, height: 5 },
+              shadowOpacity: 0.12,
+              shadowRadius: 12,
+              elevation: 8,
+            }}
+          >
+            {tabBarWidth > 0 ? (
+              <Animated.View
+                pointerEvents="none"
+                className="absolute bottom-1.5 top-1.5 rounded-[20px] bg-[#EAF5EF]"
+                style={{
+                  left: 8,
+                  width: (tabBarWidth - 16) / 2,
+                  transform: [
+                    {
+                      translateX: tabPosition.interpolate({
+                        inputRange: [0, 1],
+                        outputRange: [0, (tabBarWidth - 16) / 2],
+                      }),
+                    },
+                  ],
+                }}
+              />
+            ) : null}
+            <TabButton
+              icon="home-outline"
+              activeIcon="home"
+              label="Home"
+              active={activeTab === "home"}
+              onPress={() => navigate("home")}
+            />
+            <TabButton
+              icon="search-outline"
+              activeIcon="search"
+              label="Find users"
+              active={activeTab === "find"}
+              onPress={() => navigate("find")}
+            />
+          </View>
         </View>
       ) : null}
     </>
@@ -208,24 +250,10 @@ function TabButton({
       accessibilityState={{ selected: active }}
       accessibilityLabel={label}
       onPress={onPress}
-      className="flex-1 active:opacity-80"
+      className="z-10 flex-1 active:opacity-80"
     >
-      <View
-        className={`min-h-[54px] flex-row items-center justify-center rounded-2xl px-3 ${
-          active ? "bg-[#EAF5EF]" : "bg-transparent"
-        }`}
-      >
-        <View
-          className={`h-9 w-9 items-center justify-center rounded-xl ${
-            active ? "bg-brand" : "bg-canvas"
-          }`}
-        >
-          <Ionicons
-            name={active ? activeIcon : icon}
-            size={19}
-            color={active ? "white" : "#72807C"}
-          />
-        </View>
+      <View className="min-h-[54px] flex-row items-center justify-center rounded-2xl px-3">
+        <Ionicons name={active ? activeIcon : icon} size={20} color={active ? "#176B57" : "#72807C"} />
         <Text
           className={`ml-2 text-sm font-bold ${
             active ? "text-brand" : "text-muted"

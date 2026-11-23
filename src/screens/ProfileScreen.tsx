@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Alert, Pressable, ScrollView, Text, View } from "react-native";
+import * as LocalAuthentication from "expo-local-authentication";
 import { Ionicons } from "@expo/vector-icons";
 import {
   Avatar,
@@ -10,6 +11,7 @@ import {
   Surface,
 } from "../components/UI";
 import type { ProfileBiometrics, UserProfile } from "../types";
+import { BiometricDataScreen } from "./BiometricDataScreen";
 import { FaceCaptureScreen } from "./FaceCaptureScreen";
 import { VoiceCaptureScreen } from "./VoiceCaptureScreen";
 
@@ -31,6 +33,11 @@ export function ProfileScreen({
   const [verificationMode, setVerificationMode] = useState<VerificationMode | null>(null);
   const [biometrics, setBiometrics] = useState<ProfileBiometrics | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [unlockMethod, setUnlockMethod] = useState<
+    VerificationMode | "device" | null
+  >(null);
+  const [deviceUnlocking, setDeviceUnlocking] = useState(false);
+  const [showBiometricData, setShowBiometricData] = useState(false);
 
   async function beginVerification(mode: VerificationMode) {
     setLoadingMode(mode);
@@ -49,6 +56,39 @@ export function ProfileScreen({
       );
     } finally {
       setLoadingMode(null);
+    }
+  }
+
+  async function unlockWithDeviceBiometrics() {
+    if (deviceUnlocking) return;
+    setDeviceUnlocking(true);
+    setLoadError(null);
+    try {
+      const result = await LocalAuthentication.authenticateAsync({
+        promptMessage: "Unlock this local profile",
+        promptSubtitle: "Confirms this device user, not the profile's identity",
+        cancelLabel: "Cancel",
+        disableDeviceFallback: true,
+        biometricsSecurityLevel: "strong",
+      });
+      if (!result.success) {
+        throw new Error(
+          result.error === "not_enrolled" || result.error === "not_available"
+            ? "No usable device authentication is configured. Enroll a device biometric or use face or voice profile verification."
+            : "Device authentication did not complete successfully."
+        );
+      }
+
+      const saved = await onLoadBiometrics();
+      setBiometrics(saved);
+      setUnlockMethod("device");
+      setUnlocked(true);
+    } catch (error) {
+      setLoadError(
+        error instanceof Error ? error.message : "The profile could not be unlocked with device authentication."
+      );
+    } finally {
+      setDeviceUnlocking(false);
     }
   }
 
@@ -76,7 +116,10 @@ export function ProfileScreen({
         mode="verify"
         profileId={user.id}
         expectedTemplate={biometrics.faceTemplate}
-        onVerified={() => setUnlocked(true)}
+        onVerified={() => {
+          setUnlockMethod("face");
+          setUnlocked(true);
+        }}
         onCancel={() => setVerificationMode(null)}
       />
     );
@@ -88,8 +131,21 @@ export function ProfileScreen({
         mode="verify"
         profileId={user.id}
         expectedEmbedding={biometrics.voiceEmbedding}
-        onVerified={() => setUnlocked(true)}
+        onVerified={() => {
+          setUnlockMethod("voice");
+          setUnlocked(true);
+        }}
         onCancel={() => setVerificationMode(null)}
+      />
+    );
+  }
+
+  if (unlocked && showBiometricData && biometrics) {
+    return (
+      <BiometricDataScreen
+        user={user}
+        biometrics={biometrics}
+        onBack={() => setShowBiometricData(false)}
       />
     );
   }
@@ -138,6 +194,18 @@ export function ProfileScreen({
                   disabled={!user.hasVoiceTemplate || loadingMode !== null}
                 />
               </View>
+              <View className="mt-3 w-full">
+                <PrimaryButton
+                  title="Unlock with device biometrics"
+                  icon="finger-print-outline"
+                  onPress={() => void unlockWithDeviceBiometrics()}
+                  loading={deviceUnlocking}
+                  disabled={deviceUnlocking || loadingMode !== null}
+                />
+              </View>
+              <Text className="mt-3 text-center text-xs leading-5 text-muted">
+                The system prompt confirms access to this device; it does not verify that you are the person named in this profile.
+              </Text>
             </View>
 
             {loadError ? (
@@ -153,7 +221,7 @@ export function ProfileScreen({
               <Notice icon="information-circle-outline" tone="amber">
                 <Text className="text-sm font-bold text-ink">Demo-only identity matching</Text>
                 <Text className="mt-1 text-sm leading-5 text-muted">
-                  Face and voice models run locally, but are not certified for access control. Camera fingerprint matching is not supported.
+                  Face and voice models run locally, but are not certified for access control. Fingertip photos are non-authenticating demo images.
                 </Text>
               </Notice>
             </View>
@@ -175,7 +243,9 @@ export function ProfileScreen({
               <View className="mt-4 flex-row items-center rounded-full bg-white/10 px-3 py-2">
                 <Ionicons name="shield-checkmark" size={15} color="#BEE9D2" />
                 <Text className="ml-2 text-xs font-semibold text-[#BEE9D2]">
-                  {verificationMode === "face" ? "Face" : "Voice"} verification complete
+                  {unlockMethod === "device"
+                    ? "Device authentication complete"
+                    : `${unlockMethod === "face" ? "Face" : "Voice"} verification complete`}
                 </Text>
               </View>
             </View>
@@ -204,7 +274,7 @@ export function ProfileScreen({
             </View>
 
             <View className="mt-5">
-              <Text className="mb-3 text-base font-bold text-ink">Stored biometric templates</Text>
+              <Text className="mb-3 text-base font-bold text-ink">Stored biometric data</Text>
               <Surface className="p-0">
                 <TemplateRow
                   icon="scan-outline"
@@ -227,10 +297,31 @@ export function ProfileScreen({
                   }
                   available={user.hasVoiceTemplate}
                 />
+                <View className="mx-4 h-px bg-line" />
+                <TemplateRow
+                  icon="finger-print-outline"
+                  title="Fingertip camera photos"
+                  detail={
+                    biometrics
+                      ? `${biometrics.fingertipPhotos.length} compressed demo photos · not fingerprint templates`
+                      : user.hasFingertipPhotos
+                        ? "Demo photos saved locally"
+                        : "No fingertip demo photos"
+                  }
+                  available={user.hasFingertipPhotos}
+                />
               </Surface>
               <Text className="mt-3 text-xs leading-5 text-muted">
-                Templates are stored in the encrypted local database; raw face frames and voice audio are not retained.
+                Face and voice templates and camera demo photos are stored in the encrypted local database; raw face frames and voice audio are not retained. The demo photos do not authenticate.
               </Text>
+            </View>
+
+            <View className="mt-5">
+              <PrimaryButton
+                title="View backend JSON preview"
+                icon="code-slash-outline"
+                onPress={() => setShowBiometricData(true)}
+              />
             </View>
 
             <Pressable

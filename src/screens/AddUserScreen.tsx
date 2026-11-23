@@ -5,7 +5,12 @@ import { Ionicons } from "@expo/vector-icons";
 import { Field, Notice, Page, PrimaryButton } from "../components/UI";
 import { FaceCaptureScreen } from "./FaceCaptureScreen";
 import { VoiceCaptureScreen } from "./VoiceCaptureScreen";
-import type { NewUserProfile } from "../types";
+import { FingertipCaptureScreen } from "./FingertipCaptureScreen";
+import {
+  FINGERTIP_FINGERS,
+  type FingertipPhoto,
+  type NewUserProfile,
+} from "../types";
 
 export function AddUserScreen({
   onCancel,
@@ -21,10 +26,17 @@ export function AddUserScreen({
   const [notes, setNotes] = useState("");
   const [photoDataUrl, setPhotoDataUrl] = useState<string | null>(null);
   const [consent, setConsent] = useState(false);
-  const [captureStep, setCaptureStep] = useState<"details" | "face" | "voice">("details");
+  const [captureStep, setCaptureStep] = useState<
+    "details" | "face" | "voice" | "fingertips"
+  >("details");
   const [faceTemplate, setFaceTemplate] = useState<Uint8Array | null>(null);
   const [voiceEmbedding, setVoiceEmbedding] = useState<number[] | null>(null);
+  const [fingertipPhotos, setFingertipPhotos] = useState<FingertipPhoto[]>([]);
   const [saving, setSaving] = useState(false);
+  const biometricsReady =
+    Boolean(faceTemplate) &&
+    Boolean(voiceEmbedding) &&
+    fingertipPhotos.length === FINGERTIP_FINGERS.length;
 
   if (captureStep === "face") {
     return (
@@ -45,6 +57,18 @@ export function AddUserScreen({
         mode="enroll"
         onComplete={(embedding) => {
           setVoiceEmbedding(embedding);
+          setCaptureStep("fingertips");
+        }}
+        onCancel={() => setCaptureStep("details")}
+      />
+    );
+  }
+
+  if (captureStep === "fingertips") {
+    return (
+      <FingertipCaptureScreen
+        onComplete={(photos) => {
+          setFingertipPhotos(photos);
           setCaptureStep("details");
         }}
         onCancel={() => setCaptureStep("details")}
@@ -106,10 +130,10 @@ export function AddUserScreen({
       return;
     }
 
-    if (!faceTemplate || !voiceEmbedding) {
+    if (!faceTemplate || !voiceEmbedding || fingertipPhotos.length !== FINGERTIP_FINGERS.length) {
       Alert.alert(
         "Biometric enrollment required",
-        "Capture a live face template and a voice template before saving this profile."
+        "Capture the face and voice templates and all ten fingertip demo photos before saving this profile."
       );
       return;
     }
@@ -125,6 +149,7 @@ export function AddUserScreen({
         photoDataUrl,
         faceTemplate,
         voiceEmbedding,
+        fingertipPhotos,
       });
     } catch (error) {
       Alert.alert(
@@ -148,7 +173,7 @@ export function AddUserScreen({
         </Pressable>
         <Text className="text-2xl font-extrabold text-ink">Add a user</Text>
         <Text className="mt-2 text-sm leading-5 text-muted">
-          Add contact details, then create on-device face and voice templates.
+          Add contact details, then create on-device face and voice templates and ten fingertip demo photos.
         </Text>
 
         <View className="my-6 items-center">
@@ -195,9 +220,9 @@ export function AddUserScreen({
         <View className="mb-4 rounded-2xl border border-line bg-white p-4">
           <Text className="text-sm font-bold text-ink">Biometric enrollment</Text>
           <Text className="mt-1 text-xs leading-5 text-muted">
-            {faceTemplate && voiceEmbedding
-              ? "Face and voice templates are ready to save."
-              : "Both face and voice enrollment are required for this demo profile."}
+            {biometricsReady
+              ? "Face and voice templates and all ten fingertip demo photos are ready."
+              : "Complete face and voice enrollment and capture all ten demo fingertip photos."}
           </Text>
           <View className="mt-4 flex-row items-center">
             <Ionicons
@@ -225,29 +250,51 @@ export function AddUserScreen({
               <Text className="text-xs text-muted">{voiceEmbedding.length} values</Text>
             ) : null}
           </View>
+          <View className="mt-3 flex-row items-center">
+            <Ionicons
+              name={fingertipPhotos.length === FINGERTIP_FINGERS.length ? "checkmark-circle" : "ellipse-outline"}
+              size={19}
+              color={fingertipPhotos.length === FINGERTIP_FINGERS.length ? "#176B57" : "#9AA49F"}
+            />
+            <Text className="ml-2 flex-1 text-sm font-medium text-ink">
+              Fingertip demo photos {fingertipPhotos.length === FINGERTIP_FINGERS.length ? "captured" : "not captured"}
+            </Text>
+            {fingertipPhotos.length > 0 ? (
+              <Text className="text-xs text-muted">{fingertipPhotos.length}/10 photos</Text>
+            ) : null}
+          </View>
           <View className="mt-4">
             <PrimaryButton
               title={
-                faceTemplate && voiceEmbedding
+                biometricsReady
                   ? "Re-enroll biometrics"
-                  : faceTemplate
-                    ? "Continue with voice"
-                    : "Start face enrollment"
+                  : !faceTemplate
+                    ? "Start face enrollment"
+                    : !voiceEmbedding
+                      ? "Continue with voice"
+                      : "Continue with fingertip photos"
               }
-              icon={faceTemplate && voiceEmbedding ? "refresh" : "scan-outline"}
+              icon={biometricsReady ? "refresh" : "scan-outline"}
               onPress={() => {
                 if (!consent) {
                   Alert.alert(
                     "Consent required",
-                    "Confirm consent to on-device biometric processing before enrollment."
+                    "Confirm consent to on-device biometric processing and local fingertip photo storage before enrollment."
                   );
                   return;
                 }
-                if (faceTemplate && voiceEmbedding) {
+                if (biometricsReady) {
                   setFaceTemplate(null);
                   setVoiceEmbedding(null);
+                  setFingertipPhotos([]);
                 }
-                setCaptureStep(faceTemplate && !voiceEmbedding ? "voice" : "face");
+                setCaptureStep(
+                  !faceTemplate
+                    ? "face"
+                    : !voiceEmbedding
+                      ? "voice"
+                      : "fingertips"
+                );
               }}
               disabled={saving}
             />
@@ -266,14 +313,14 @@ export function AddUserScreen({
             color={consent ? "#176B57" : "#72807C"}
           />
           <Text className="ml-3 flex-1 text-xs leading-5 text-muted">
-            I have permission to enroll this person and consent to processing their live face frames and voice sample on this device. Only derived templates are saved; raw face video and audio are not retained.
+            I have permission to enroll this person and consent to processing their live face frames and voice sample on this device, and to storing one camera photo for each fingertip in the encrypted profile database. Fingertip photos are not fingerprint templates and are not used for authentication. No data is uploaded; the local JSON preview includes sensitive biometric data, and copying it places that data on the clipboard.
           </Text>
         </Pressable>
 
         <Notice icon="lock-closed-outline">
           <Text className="text-sm font-bold text-ink">Stored privately on this device</Text>
           <Text className="mt-1 text-sm leading-5 text-muted">
-            Profile details, face template, and voice embedding are saved in the encrypted local database. Samples are processed on device and are not saved.
+            Profile details, face template, voice embedding, and compressed fingertip demo photos are saved in the encrypted local database. Face frames and voice recordings are processed on device and are not saved. Nothing is sent to an API.
           </Text>
         </Notice>
         <View className="mt-6">
@@ -282,7 +329,7 @@ export function AddUserScreen({
             icon="checkmark"
             onPress={submit}
             loading={saving}
-            disabled={!consent || !faceTemplate || !voiceEmbedding || saving}
+            disabled={!consent || !biometricsReady || saving}
           />
         </View>
       </ScrollView>

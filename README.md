@@ -10,19 +10,24 @@ Biomatic Demo App is an Expo / React Native sample for creating local user profi
 - Optional profile picture and basic contact details.
 - Live face-frame enrollment with passive liveness checks, front/back camera selection, and profile-specific matching.
 - Streaming voice enrollment and profile-specific speaker matching using Sherpa-ONNX.
+- Capture of ten resized JPEG fingertip camera photos, one for each finger, as demo data only.
+- Local profile unlock using face or voice matching, or the operating system's device biometric prompt. The system prompt confirms access to the device and does not verify the profile's identity.
 - Consent before enrollment. Raw face frames and voice audio are processed in memory and are not intentionally saved.
-- Face templates and voice embeddings stored in the encrypted profile database.
-- No fingerprint enrollment or matching. Mobile operating systems do not expose raw fingerprint templates to applications, and this demo does not use the system biometric prompt.
+- Face templates, voice embeddings, and demo fingertip photos stored in the encrypted profile database.
+- A versioned JSON preview and clipboard copy action for future API integration. No endpoint is configured and the app does not upload biometric data.
+- No fingerprint-template enrollment or matching. Mobile operating systems do not expose raw fingerprint templates to applications, and ordinary camera photos are not fingerprint templates and cannot authenticate.
 
 ## Privacy and data
 
-Profiles and biometric templates are kept locally in SQLCipher-encrypted SQLite. The random database key is held in iOS Keychain / Android Keystore through `expo-secure-store`. The face and voice models run locally after they are downloaded.
+Profiles, face and voice templates, and compressed fingertip demo photos are kept locally in SQLCipher-encrypted SQLite. The random database key is held in iOS Keychain / Android Keystore through `expo-secure-store`. The face and voice models run locally after they are downloaded.
 
 On first launch, profiles from the previous unencrypted demo database are copied into the encrypted database. The legacy database is removed only after the copy succeeds.
 
-The face detector/recognizer and voice model are downloaded from their respective open-source project release sources. Face models are prepared during the native prebuild command; the speaker model is downloaded when the voice flow is first opened. An internet connection is required for those first downloads. No face video or voice recording is written to app storage. The database retains derived face and speaker templates only.
+The face detector/recognizer and voice model are downloaded from their respective open-source project release sources. Face models are prepared during the native prebuild command; the speaker model is downloaded when the voice flow is first opened. An internet connection is required for those first downloads. No face video or voice recording is written to app storage. Ten compressed fingertip camera photos are saved as explicitly non-authenticating demo data.
 
-Biometric information is sensitive personal data. Enroll only with the subject's informed permission, delete profiles when no longer needed, and obtain legal, privacy, and security review before adapting this sample for real users.
+The JSON preview is generated locally and is not an API contract. It represents the face template as opaque, module-specific base64 bytes, the speaker embedding as a numeric vector with model/sample-rate metadata, and the fingertip photos as JPEG base64 with an explicit demo-only marker. Confirm the production API schema and security requirements with the backend team before connecting an endpoint. Copying the preview copies sensitive biometric and profile data to the system clipboard.
+
+Biometric information is sensitive personal data. Enroll only with the subject's informed permission, delete profiles when no longer needed, and obtain legal, privacy, and security review before adapting this sample for real users. The camera photos do not authenticate fingerprints, and the OS biometric prompt only confirms access to the local device.
 
 ## Requirements
 
@@ -79,9 +84,10 @@ Review the individual SDK and model licenses before redistribution or commercial
 ```text
 App.tsx                         App state, navigation, and screen coordination
 src/
+  biometrics/apiPayload.ts     Versioned local JSON-preview payload
   biometrics/voice.ts           Voice model download and speaker-engine lifecycle
   components/UI.tsx             Shared NativeWind components
-  screens/                      Onboarding, home, add, find, capture, and profile UI
+  screens/                      Onboarding, home, add, find, capture, preview, and profile UI
   storage.ts                    SQLCipher database and template persistence
   types.ts                      Profile and biometric-template types
 plugins/
