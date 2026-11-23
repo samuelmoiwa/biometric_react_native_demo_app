@@ -1,0 +1,47 @@
+{
+  "expo": {
+    "name": "Biomatic Demo App",
+    "slug": "biomatic-demo-app",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "backgroundColor": "#F5F7F4"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSFaceIDUsageDescription": "Use Face ID to unlock a selected demo profile."
+      },
+      "bundleIdentifier": "com.samuelmoiwa.biomaticdemoapp"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#F5F7F4"
+      },
+      "permissions": [
+        "android.permission.USE_BIOMETRIC",
+        "android.permission.USE_FINGERPRINT"
+      ],
+      "package": "com.samuelmoiwa.biomaticdemoapp"
+    },
+    "plugins": [
+      "expo-local-authentication",
+      [
+        "expo-sqlite",
+        {
+          "useSQLCipher": true
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Choose a profile picture to save with a demo user profile.",
+          "cameraPermission": false,
+          "microphonePermission": false
+        }
+      ],
+      "expo-secure-store"
+    ]
+  }
+}
