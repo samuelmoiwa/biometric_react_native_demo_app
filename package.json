@@ -18,6 +18,7 @@
     "@expo/vector-icons": "^15.1.1",
     "@siteed/audio-studio": "^3.2.1",
     "@siteed/sherpa-onnx.rn": "^2.0.1",
+    "biometric-demo-hand-landmarks": "file:vendor/hand-landmarks",
     "expo": "~58.0.26",
     "expo-clipboard": "~58.0.4",
     "expo-crypto": "~58.0.8",
@@ -49,6 +50,7 @@
   "devDependencies": {
     "@types/react": "^19.2.0",
     "babel-preset-expo": "~58.0.26",
+    "nitrogen": "0.35.9",
     "typescript": "~6.0.3"
   }
 }

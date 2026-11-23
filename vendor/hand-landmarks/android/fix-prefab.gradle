@@ -1,0 +1,41 @@
+tasks.configureEach { task ->
+  def matcher = task.name =~ ~/^prefab(.+)ConfigurePackage$/
+  if (matcher.matches()) {
+    def variantName = matcher[0][1]
+    task.outputs.upToDateWhen { false }
+    task.dependsOn("externalNativeBuild${variantName}")
+  }
+}
+
+afterEvaluate {
+  def architectures = reactNativeArchitectures()
+  def libraryProject = project
+  rootProject.allprojects.each { consumerProject ->
+    if (consumerProject === rootProject) return
+
+    def dependsOnLibrary = consumerProject.configurations.findAll { it.canBeResolved }.any { configuration ->
+      configuration.dependencies.any { dependency ->
+        dependency.group == libraryProject.group && dependency.name == libraryProject.name
+      }
+    }
+    if (!dependsOnLibrary || consumerProject === libraryProject) return
+    if (!consumerProject.plugins.hasPlugin("com.android.application") &&
+        !consumerProject.plugins.hasPlugin("com.android.library")) return
+
+    def variants = consumerProject.android.hasProperty("applicationVariants")
+      ? consumerProject.android.applicationVariants
+      : consumerProject.android.libraryVariants
+    variants.all { variant ->
+      architectures.each { abi ->
+        def searchDir = new File(consumerProject.projectDir, ".cxx/${variant.name}")
+        if (!searchDir.exists()) return
+        searchDir.eachDir { randomDir ->
+          def prefabFile = new File(randomDir, "${abi}/prefab_config.json")
+          if (prefabFile.exists()) {
+            prefabFile.setLastModified(System.currentTimeMillis())
+          }
+        }
+      }
+    }
+  }
+}

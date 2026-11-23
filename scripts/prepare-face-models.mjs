@@ -40,6 +40,18 @@ const sherpaRuntimeMetadata = path.join(
   "android",
   "build-metadata.json"
 );
+const handLandmarksModel = path.join(
+  projectRoot,
+  "node_modules",
+  "biometric-demo-hand-landmarks",
+  "android",
+  "src",
+  "main",
+  "assets",
+  "hand_landmarker.task"
+);
+const handLandmarksModelUrl =
+  "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
 
 async function isPresent(filePath) {
   try {
@@ -91,31 +103,48 @@ for (const model of requiredModels) {
 
 if (missingModels.length === 0) {
   console.log("Face recognition models are already available.");
-  process.exit(0);
-}
+} else {
+  const fetchScript = path.join(moduleRoot, "scripts", "fetch-models.sh");
+  try {
+    await access(fetchScript);
+  } catch (error) {
+    throw new Error(
+      `The face-recognition module is missing its model fetch script at ${fetchScript}. Reinstall dependencies and try again.`,
+      { cause: error }
+    );
+  }
 
-const fetchScript = path.join(moduleRoot, "scripts", "fetch-models.sh");
-try {
-  await access(fetchScript);
-} catch (error) {
-  throw new Error(
-    `The face-recognition module is missing its model fetch script at ${fetchScript}. Reinstall dependencies and try again.`,
-    { cause: error }
-  );
-}
+  const sfacePath = path.join(modelRoot, "sface.onnx");
+  const existingSface = (await isPresent(sfacePath)) ? await readFile(sfacePath) : null;
+  try {
+    execFileSync("bash", [fetchScript], { cwd: moduleRoot, stdio: "inherit" });
+  } finally {
+    if (existingSface) {
+      await writeFile(sfacePath, existingSface);
+    }
+  }
 
-const sfacePath = path.join(modelRoot, "sface.onnx");
-const existingSface = (await isPresent(sfacePath)) ? await readFile(sfacePath) : null;
-try {
-  execFileSync("bash", [fetchScript], { cwd: moduleRoot, stdio: "inherit" });
-} finally {
-  if (existingSface) {
-    await writeFile(sfacePath, existingSface);
+  for (const model of requiredModels) {
+    if (!(await isPresent(path.join(modelRoot, model)))) {
+      throw new Error(`Face recognition model download did not produce ${model}.`);
+    }
   }
 }
 
-for (const model of requiredModels) {
-  if (!(await isPresent(path.join(modelRoot, model)))) {
-    throw new Error(`Face recognition model download did not produce ${model}.`);
+if (!(await isPresent(handLandmarksModel))) {
+  const response = await fetch(handLandmarksModelUrl, {
+    signal: AbortSignal.timeout(120_000),
+  });
+  if (!response.ok) {
+    throw new Error(`Hand landmark model download failed with HTTP ${response.status}.`);
   }
+  const model = Buffer.from(await response.arrayBuffer());
+  if (model.byteLength < 1_000_000) {
+    throw new Error("The downloaded hand landmark model is unexpectedly small.");
+  }
+  await mkdir(path.dirname(handLandmarksModel), { recursive: true });
+  await writeFile(handLandmarksModel, model);
+  console.log("Downloaded the on-device MediaPipe hand landmark model.");
+} else {
+  console.log("The on-device MediaPipe hand landmark model is already available.");
 }
