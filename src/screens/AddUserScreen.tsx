@@ -3,6 +3,8 @@ import { Alert, Image, Pressable, ScrollView, Text, View } from "react-native";
 import * as ImagePicker from "expo-image-picker";
 import { Ionicons } from "@expo/vector-icons";
 import { Field, Notice, Page, PrimaryButton } from "../components/UI";
+import { FaceCaptureScreen } from "./FaceCaptureScreen";
+import { VoiceCaptureScreen } from "./VoiceCaptureScreen";
 import type { NewUserProfile } from "../types";
 
 export function AddUserScreen({
@@ -18,7 +20,37 @@ export function AddUserScreen({
   const [organization, setOrganization] = useState("");
   const [notes, setNotes] = useState("");
   const [photoDataUrl, setPhotoDataUrl] = useState<string | null>(null);
+  const [consent, setConsent] = useState(false);
+  const [captureStep, setCaptureStep] = useState<"details" | "face" | "voice">("details");
+  const [faceTemplate, setFaceTemplate] = useState<Uint8Array | null>(null);
+  const [voiceEmbedding, setVoiceEmbedding] = useState<number[] | null>(null);
   const [saving, setSaving] = useState(false);
+
+  if (captureStep === "face") {
+    return (
+      <FaceCaptureScreen
+        mode="enroll"
+        onComplete={(template) => {
+          setFaceTemplate(new Uint8Array(template));
+          setCaptureStep("voice");
+        }}
+        onCancel={() => setCaptureStep("details")}
+      />
+    );
+  }
+
+  if (captureStep === "voice") {
+    return (
+      <VoiceCaptureScreen
+        mode="enroll"
+        onComplete={(embedding) => {
+          setVoiceEmbedding(embedding);
+          setCaptureStep("details");
+        }}
+        onCancel={() => setCaptureStep("details")}
+      />
+    );
+  }
 
   async function choosePhoto() {
     try {
@@ -26,7 +58,7 @@ export function AddUserScreen({
       if (!permission.granted) {
         Alert.alert(
           "Photo permission needed",
-          "Allow photo access to choose a profile picture. The app does not access your camera or microphone."
+          "Allow photo-library access to choose a profile picture. This permission is used only for the selected photo."
         );
         return;
       }
@@ -66,6 +98,21 @@ export function AddUserScreen({
       Alert.alert("Check the email address", "Enter a valid email address and try again.");
       return;
     }
+    if (!consent) {
+      Alert.alert(
+        "Consent required",
+        "Confirm consent to on-device biometric processing before saving this profile."
+      );
+      return;
+    }
+
+    if (!faceTemplate || !voiceEmbedding) {
+      Alert.alert(
+        "Biometric enrollment required",
+        "Capture a live face template and a voice template before saving this profile."
+      );
+      return;
+    }
 
     setSaving(true);
     try {
@@ -76,6 +123,8 @@ export function AddUserScreen({
         organization: organization.trim(),
         notes: notes.trim(),
         photoDataUrl,
+        faceTemplate,
+        voiceEmbedding,
       });
     } catch (error) {
       Alert.alert(
@@ -99,7 +148,7 @@ export function AddUserScreen({
         </Pressable>
         <Text className="text-2xl font-extrabold text-ink">Add a user</Text>
         <Text className="mt-2 text-sm leading-5 text-muted">
-          Create a local profile. No biometric sample is collected or attached.
+          Add contact details, then create on-device face and voice templates.
         </Text>
 
         <View className="my-6 items-center">
@@ -143,14 +192,98 @@ export function AddUserScreen({
           textAlignVertical="top"
         />
 
+        <View className="mb-4 rounded-2xl border border-line bg-white p-4">
+          <Text className="text-sm font-bold text-ink">Biometric enrollment</Text>
+          <Text className="mt-1 text-xs leading-5 text-muted">
+            {faceTemplate && voiceEmbedding
+              ? "Face and voice templates are ready to save."
+              : "Both face and voice enrollment are required for this demo profile."}
+          </Text>
+          <View className="mt-4 flex-row items-center">
+            <Ionicons
+              name={faceTemplate ? "checkmark-circle" : "ellipse-outline"}
+              size={19}
+              color={faceTemplate ? "#176B57" : "#9AA49F"}
+            />
+            <Text className="ml-2 flex-1 text-sm font-medium text-ink">
+              Face template {faceTemplate ? "captured" : "not captured"}
+            </Text>
+            {faceTemplate ? (
+              <Text className="text-xs text-muted">{faceTemplate.byteLength} bytes</Text>
+            ) : null}
+          </View>
+          <View className="mt-3 flex-row items-center">
+            <Ionicons
+              name={voiceEmbedding ? "checkmark-circle" : "ellipse-outline"}
+              size={19}
+              color={voiceEmbedding ? "#176B57" : "#9AA49F"}
+            />
+            <Text className="ml-2 flex-1 text-sm font-medium text-ink">
+              Voice template {voiceEmbedding ? "captured" : "not captured"}
+            </Text>
+            {voiceEmbedding ? (
+              <Text className="text-xs text-muted">{voiceEmbedding.length} values</Text>
+            ) : null}
+          </View>
+          <View className="mt-4">
+            <PrimaryButton
+              title={
+                faceTemplate && voiceEmbedding
+                  ? "Re-enroll biometrics"
+                  : faceTemplate
+                    ? "Continue with voice"
+                    : "Start face enrollment"
+              }
+              icon={faceTemplate && voiceEmbedding ? "refresh" : "scan-outline"}
+              onPress={() => {
+                if (!consent) {
+                  Alert.alert(
+                    "Consent required",
+                    "Confirm consent to on-device biometric processing before enrollment."
+                  );
+                  return;
+                }
+                if (faceTemplate && voiceEmbedding) {
+                  setFaceTemplate(null);
+                  setVoiceEmbedding(null);
+                }
+                setCaptureStep(faceTemplate && !voiceEmbedding ? "voice" : "face");
+              }}
+              disabled={saving}
+            />
+          </View>
+        </View>
+
+        <Pressable
+          accessibilityRole="checkbox"
+          accessibilityState={{ checked: consent }}
+          onPress={() => setConsent((current) => !current)}
+          className="mb-4 flex-row items-start rounded-2xl border border-line bg-white p-4"
+        >
+          <Ionicons
+            name={consent ? "checkbox" : "square-outline"}
+            size={21}
+            color={consent ? "#176B57" : "#72807C"}
+          />
+          <Text className="ml-3 flex-1 text-xs leading-5 text-muted">
+            I have permission to enroll this person and consent to processing their live face frames and voice sample on this device. Only derived templates are saved; raw face video and audio are not retained.
+          </Text>
+        </Pressable>
+
         <Notice icon="lock-closed-outline">
           <Text className="text-sm font-bold text-ink">Stored privately on this device</Text>
           <Text className="mt-1 text-sm leading-5 text-muted">
-            Profile fields and the selected photo are saved in an encrypted local database. We do not record face video or voice.
+            Profile details, face template, and voice embedding are saved in the encrypted local database. Samples are processed on device and are not saved.
           </Text>
         </Notice>
         <View className="mt-6">
-          <PrimaryButton title="Save user profile" icon="checkmark" onPress={submit} loading={saving} />
+          <PrimaryButton
+            title="Save user profile"
+            icon="checkmark"
+            onPress={submit}
+            loading={saving}
+            disabled={!consent || !faceTemplate || !voiceEmbedding || saving}
+          />
         </View>
       </ScrollView>
     </Page>

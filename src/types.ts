@@ -6,9 +6,20 @@ export type UserProfile = {
   organization: string;
   notes: string;
   photoDataUrl: string | null;
+  hasFaceTemplate: boolean;
+  hasVoiceTemplate: boolean;
   createdAt: string;
 };
 
-export type NewUserProfile = Omit<UserProfile, "id" | "createdAt">;
+export type NewUserProfile = Omit<
+  UserProfile,
+  "id" | "createdAt" | "hasFaceTemplate" | "hasVoiceTemplate"
+> & {
+  faceTemplate: Uint8Array;
+  voiceEmbedding: number[];
+};
 
-export type SupportedBiometric = "Face recognition" | "Fingerprint" | "Iris";
+export type ProfileBiometrics = {
+  faceTemplate: Uint8Array | null;
+  voiceEmbedding: number[] | null;
+};

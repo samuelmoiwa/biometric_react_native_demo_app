@@ -57,7 +57,7 @@ export function HomeScreen({
             A secure home for your people.
           </Text>
           <Text className="mt-2 max-w-[270px] text-sm leading-5 text-white/75">
-            Manage profiles and verify access with your device.
+            Manage local profiles and explore on-device face and voice matching.
           </Text>
           <View className="mt-4 flex-row items-center">
             <Ionicons name="shield-checkmark-outline" size={15} color="#BEE9D2" />
@@ -169,9 +169,9 @@ export function HomeScreen({
         <View className="mt-6 flex-row items-center rounded-2xl bg-mint/60 p-4">
           <IconTile icon="finger-print-outline" size={38} />
           <View className="ml-3 flex-1">
-            <Text className="text-sm font-bold text-ink">Your device handles biometrics</Text>
+            <Text className="text-sm font-bold text-ink">Face and voice matching, on device</Text>
             <Text className="mt-1 text-xs leading-4 text-muted">
-              Templates stay in the secure system enclave, not in this app.
+              Derived templates are encrypted locally. Fingerprint scanning is not supported.
             </Text>
           </View>
         </View>

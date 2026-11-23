@@ -14,6 +14,7 @@ import {
   completeOnboarding,
   createProfile,
   deleteProfile,
+  getProfileBiometrics,
   hasCompletedOnboarding,
   listProfiles,
 } from "./src/storage";
@@ -144,6 +145,7 @@ function AppContent() {
             user={selectedProfile}
             onBack={() => setSelectedProfile(null)}
             onDelete={() => removeProfile(selectedProfile.id)}
+            onLoadBiometrics={() => getProfileBiometrics(selectedProfile.id)}
           />
         ) : screen === "add" ? (
           <AddUserScreen

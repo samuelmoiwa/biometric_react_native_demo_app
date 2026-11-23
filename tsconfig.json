@@ -2,7 +2,12 @@
   "extends": "expo/tsconfig.base",
   "compilerOptions": {
     "strict": true,
-    "noEmit": true
+    "noEmit": true,
+    "paths": {
+      "react-native-vision-camera-face-recognizer": [
+        "./vendor/face-recognition-demo/modules/react-native-face-recognition/src/index.ts"
+      ]
+    }
   },
   "include": [
     "**/*.ts",

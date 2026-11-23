@@ -20,15 +20,15 @@ export function OnboardingScreen({ onContinue }: { onContinue: () => void }) {
           </Text>
           <Text className="mt-3 max-w-xs text-center text-base leading-6 text-muted">
             A thoughtful, on-device demo for managing profiles and exploring
-            native biometric verification.
+            face and voice matching.
           </Text>
         </View>
 
         <View className="mb-6 gap-3">
           {[
             ["person-add-outline", "Create local profiles", "Keep contact details and a profile photo on this device."],
-            ["lock-closed-outline", "Verify with your device", "Use the secure biometric prompt provided by iOS or Android."],
-            ["shield-checkmark-outline", "Stay in control", "Profile records are encrypted locally; biometric samples are never collected."],
+            ["lock-closed-outline", "Verify with your profile", "Compare a live face or voice sample with the selected profile's saved template."],
+            ["shield-checkmark-outline", "Stay in control", "Profile details and derived templates are encrypted locally; raw samples are not kept."],
           ].map(([icon, title, description]) => (
             <View
               key={title}
@@ -46,11 +46,11 @@ export function OnboardingScreen({ onContinue }: { onContinue: () => void }) {
         </View>
 
         <Notice icon="information-circle-outline" tone="amber">
-          <Text className="text-sm font-bold text-ink">A demo, not biometric enrollment</Text>
+          <Text className="text-sm font-bold text-ink">A demo, not production identity proofing</Text>
           <Text className="mt-1 text-sm leading-5 text-muted">
-            Mobile operating systems do not share fingerprint templates or
-            identify which person passed a device prompt. This app stores no
-            face video, voice recording, or fingerprint sample.
+            Face and voice templates are matched locally. No fingerprint data is
+            collected, and raw face frames or voice recordings are not retained.
+            Do not use this app for access control.
           </Text>
         </Notice>
 

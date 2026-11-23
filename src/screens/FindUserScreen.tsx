@@ -66,7 +66,7 @@ export function FindUserScreen({
       >
         <Text className="text-2xl font-extrabold text-ink">Find a user</Text>
         <Text className="mt-2 text-sm leading-5 text-muted">
-          Search your local directory, then verify on this device to unlock a profile.
+          Search locally, then match the selected profile with its enrolled face or voice template.
         </Text>
 
         <View className="mt-6 flex-row items-center rounded-2xl border border-line bg-white px-4">
@@ -126,7 +126,7 @@ export function FindUserScreen({
                   key={user.id}
                   onPress={() => onSelectUser(user)}
                   accessibilityRole="button"
-                  accessibilityLabel={`Select ${user.name} for device verification`}
+                  accessibilityLabel={`Select ${user.name} for biometric verification`}
                 >
                   <Surface className="p-3">
                     <UserRow user={user} />
@@ -141,9 +141,9 @@ export function FindUserScreen({
           <View className="flex-row items-start rounded-2xl bg-mint/60 p-4">
             <IconTile icon="finger-print-outline" size={36} />
             <View className="ml-3 flex-1">
-              <Text className="text-sm font-bold text-ink">How verification works</Text>
+              <Text className="text-sm font-bold text-ink">Profile-specific matching</Text>
               <Text className="mt-1 text-xs leading-5 text-muted">
-                Your device confirms an enrolled biometric. It does not identify a saved person or expose their biometric template.
+                Live face frames or a short voice sample are compared on this device with the selected profile's encrypted template.
               </Text>
             </View>
           </View>

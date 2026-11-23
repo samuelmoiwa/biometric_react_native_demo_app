@@ -11,7 +11,8 @@
     "ios": {
       "supportsTablet": true,
       "infoPlist": {
-        "NSFaceIDUsageDescription": "Use Face ID to unlock a selected demo profile."
+        "NSCameraUsageDescription": "Capture live face frames to create and verify an on-device face template.",
+        "NSMicrophoneUsageDescription": "Record a short voice sample to create and verify an on-device voice template."
       },
       "bundleIdentifier": "com.samuelmoiwa.biomaticdemoapp"
     },
@@ -20,13 +21,12 @@
         "backgroundColor": "#F5F7F4"
       },
       "permissions": [
-        "android.permission.USE_BIOMETRIC",
-        "android.permission.USE_FINGERPRINT"
+        "android.permission.CAMERA"
       ],
       "package": "com.samuelmoiwa.biomaticdemoapp"
     },
     "plugins": [
-      "expo-local-authentication",
+      "./plugins/withAndroidOnnxRuntimePickFirst",
       [
         "expo-sqlite",
         {
@@ -34,11 +34,24 @@
         }
       ],
       [
+        "@siteed/audio-studio",
+        {
+          "enablePhoneStateHandling": false,
+          "enableNotifications": false,
+          "enableBackgroundAudio": false,
+          "enableDeviceDetection": false,
+          "iosConfig": {
+            "microphoneUsageDescription": "Record a short voice sample to create and verify an on-device voice template."
+          }
+        }
+      ],
+      "@siteed/sherpa-onnx.rn",
+      [
         "expo-image-picker",
         {
           "photosPermission": "Choose a profile picture to save with a demo user profile.",
-          "cameraPermission": false,
-          "microphonePermission": false
+          "cameraPermission": "Capture live face frames for on-device biometric matching.",
+          "microphonePermission": "Record a short voice sample to create and verify an on-device voice template."
         }
       ],
       "expo-secure-store"
