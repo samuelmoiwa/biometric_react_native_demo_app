@@ -20,6 +20,7 @@
     "@siteed/sherpa-onnx.rn": "^2.0.1",
     "biometric-demo-hand-landmarks": "file:vendor/hand-landmarks",
     "expo": "~58.0.26",
+    "expo-build-properties": "~58.0.12",
     "expo-clipboard": "~58.0.4",
     "expo-crypto": "~58.0.8",
     "expo-dev-client": "~58.0.21",
