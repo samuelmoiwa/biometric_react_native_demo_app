@@ -1,3 +1,4 @@
+import { CROP_H, CROP_W } from "./fingerprint";
 import { VOICE_SAMPLE_RATE } from "./voice";
 import type { ProfileBiometrics, UserProfile } from "../types";
 
@@ -7,7 +8,7 @@ const VOICE_MODEL_ID = "3dspeaker-campplus-sv-en-voxceleb-16k";
 
 export type BiometricApiPayload = {
   schema: "biomatic.profile-biometrics";
-  schemaVersion: 1;
+  schemaVersion: 2;
   generatedAt: string;
   uploadStatus: "preview-only-not-uploaded";
   profile: {
@@ -33,19 +34,20 @@ export type BiometricApiPayload = {
       vectorDimension: number;
       data: number[];
     } | null;
-    fingertipPhotos: {
-      type: "demo-camera-photos-not-fingerprint-templates";
-      authenticationCapable: false;
-      encoding: "base64";
-      mimeType: "image/jpeg";
-      images: {
+    fingerprints: {
+      format: "app-specific-minutiae-template";
+      encoding: "json-number-array";
+      layout: "[x, y, angleDegrees] per minutia";
+      source: "camera-image";
+      cropSize: { width: number; height: number };
+      templates: {
         fingerId: string;
-        width: number;
-        height: number;
+        quality: number;
         capturedAt: string;
-        data: string;
+        minutiaCount: number;
+        data: number[];
       }[];
-    };
+    } | null;
   };
 };
 
@@ -76,7 +78,7 @@ export function buildBiometricApiPayload(
 ): BiometricApiPayload {
   return {
     schema: "biomatic.profile-biometrics",
-    schemaVersion: 1,
+    schemaVersion: 2,
     generatedAt: new Date().toISOString(),
     uploadStatus: "preview-only-not-uploaded",
     profile: {
@@ -106,19 +108,23 @@ export function buildBiometricApiPayload(
             data: biometrics.voiceEmbedding,
           }
         : null,
-      fingertipPhotos: {
-        type: "demo-camera-photos-not-fingerprint-templates",
-        authenticationCapable: false,
-        encoding: "base64",
-        mimeType: "image/jpeg",
-        images: biometrics.fingertipPhotos.map((photo) => ({
-          fingerId: photo.fingerId,
-          width: photo.width,
-          height: photo.height,
-          capturedAt: photo.capturedAt,
-          data: photo.dataBase64,
-        })),
-      },
+      fingerprints:
+        biometrics.fingerprintTemplates.length > 0
+          ? {
+              format: "app-specific-minutiae-template",
+              encoding: "json-number-array",
+              layout: "[x, y, angleDegrees] per minutia",
+              source: "camera-image",
+              cropSize: { width: CROP_W, height: CROP_H },
+              templates: biometrics.fingerprintTemplates.map((template) => ({
+                fingerId: template.fingerId,
+                quality: template.quality,
+                capturedAt: template.capturedAt,
+                minutiaCount: template.minutiae.length / 3,
+                data: template.minutiae,
+              })),
+            }
+          : null,
     },
   };
 }

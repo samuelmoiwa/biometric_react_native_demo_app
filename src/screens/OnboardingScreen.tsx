@@ -20,15 +20,15 @@ export function OnboardingScreen({ onContinue }: { onContinue: () => void }) {
           </Text>
           <Text className="mt-3 max-w-xs text-center text-base leading-6 text-muted">
             A thoughtful, on-device demo for managing profiles and exploring
-            face, voice, and camera-photo workflows.
+            face, voice, and camera-fingerprint workflows.
           </Text>
         </View>
 
         <View className="mb-6 gap-3">
           {[
             ["person-add-outline", "Create local profiles", "Keep contact details and a profile photo on this device."],
-            ["lock-closed-outline", "Unlock local profiles", "Use face or voice matching, or the device's system biometric prompt to unlock local profile data."],
-            ["hand-left-outline", "Explore fingertip demo photos", "Capture ten compressed camera images for a backend-format preview; they are not fingerprint templates and cannot authenticate."],
+            ["lock-closed-outline", "Unlock local profiles", "Use face, voice or fingerprint matching, or the device's system biometric prompt to unlock local profile data."],
+            ["hand-left-outline", "Scan fingerprints with the camera", "Show your fingers to the camera. Live fingers are detected, captured automatically and stored as templates you can unlock with."],
             ["shield-checkmark-outline", "Stay in control", "Data is encrypted locally and never uploaded. Copying the JSON preview places sensitive data on the clipboard."],
           ].map(([icon, title, description]) => (
             <View
@@ -49,8 +49,8 @@ export function OnboardingScreen({ onContinue }: { onContinue: () => void }) {
         <Notice icon="information-circle-outline" tone="amber">
           <Text className="text-sm font-bold text-ink">A demo, not production identity proofing</Text>
           <Text className="mt-1 text-sm leading-5 text-muted">
-            Face and voice templates are matched locally. Camera fingertip photos
-            are demo data only, not fingerprint templates or authentication. The
+            Face, voice and camera-fingerprint templates are matched locally. Camera
+            fingerprints are much less reliable than a dedicated sensor. The
             system prompt confirms device access, not profile identity. Do not use
             this app for access control.
           </Text>

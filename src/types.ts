@@ -13,11 +13,61 @@ export const FINGERTIP_FINGERS = [
 
 export type FingertipId = (typeof FINGERTIP_FINGERS)[number]["id"];
 
-export type FingertipPhoto = {
+/**
+ * Capture steps. `fingerIds` is the order in which fingers appear from the
+ * left edge of the camera preview to the right, with fingers pointing up and
+ * pads facing the camera.
+ */
+export const FINGERPRINT_STEPS = [
+  {
+    id: "left_four",
+    label: "Left hand, four fingers",
+    short: "Left fingers",
+    expected: 4,
+    fingerIds: ["left_little", "left_ring", "left_middle", "left_index"],
+  },
+  {
+    id: "right_four",
+    label: "Right hand, four fingers",
+    short: "Right fingers",
+    expected: 4,
+    fingerIds: ["right_index", "right_middle", "right_ring", "right_little"],
+  },
+  {
+    id: "left_thumb",
+    label: "Left thumb",
+    short: "Left thumb",
+    expected: 1,
+    fingerIds: ["left_thumb"],
+  },
+  {
+    id: "right_thumb",
+    label: "Right thumb",
+    short: "Right thumb",
+    expected: 1,
+    fingerIds: ["right_thumb"],
+  },
+] as const satisfies readonly {
+  id: string;
+  label: string;
+  short: string;
+  expected: number;
+  fingerIds: readonly FingertipId[];
+}[];
+
+export type FingerprintStepId = (typeof FINGERPRINT_STEPS)[number]["id"];
+
+/**
+ * App-specific minutiae template extracted from a camera image of one fingertip.
+ * `minutiae` is a flat list of [x, y, angleDegrees] triples (angle 0..179)
+ * in a width x height crop.
+ */
+export type FingerprintTemplate = {
   fingerId: FingertipId;
-  dataBase64: string;
   width: number;
   height: number;
+  minutiae: number[];
+  quality: number;
   capturedAt: string;
 };
 
@@ -31,7 +81,7 @@ export type UserProfile = {
   photoDataUrl: string | null;
   hasFaceTemplate: boolean;
   hasVoiceTemplate: boolean;
-  hasFingertipPhotos: boolean;
+  hasFingerprintTemplates: boolean;
   createdAt: string;
 };
 
@@ -41,15 +91,15 @@ export type NewUserProfile = Omit<
   | "createdAt"
   | "hasFaceTemplate"
   | "hasVoiceTemplate"
-  | "hasFingertipPhotos"
+  | "hasFingerprintTemplates"
 > & {
   faceTemplate: Uint8Array;
   voiceEmbedding: number[];
-  fingertipPhotos: FingertipPhoto[];
+  fingerprintTemplates: FingerprintTemplate[];
 };
 
 export type ProfileBiometrics = {
   faceTemplate: Uint8Array | null;
   voiceEmbedding: number[] | null;
-  fingertipPhotos: FingertipPhoto[];
+  fingerprintTemplates: FingerprintTemplate[];
 };

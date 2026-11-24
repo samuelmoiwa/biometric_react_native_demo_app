@@ -4,7 +4,7 @@ import * as SecureStore from "expo-secure-store";
 import * as SQLite from "expo-sqlite";
 import {
   FINGERTIP_FINGERS,
-  type FingertipPhoto,
+  type FingerprintTemplate,
   type NewUserProfile,
   type ProfileBiometrics,
   type UserProfile,
@@ -115,7 +115,7 @@ async function openDatabase(): Promise<SQLite.SQLiteDatabase> {
         photo_data_url TEXT,
         face_template BLOB,
         voice_embedding TEXT,
-        fingertip_photos TEXT NOT NULL DEFAULT '[]',
+        fingerprint_templates TEXT NOT NULL DEFAULT '[]',
         created_at TEXT NOT NULL
       );
       PRAGMA journal_mode = WAL;
@@ -134,9 +134,12 @@ async function openDatabase(): Promise<SQLite.SQLiteDatabase> {
         "ALTER TABLE user_profiles ADD COLUMN voice_embedding TEXT"
       );
     }
-    if (!columns.some((column) => column.name === "fingertip_photos")) {
+    // Databases created by earlier builds still hold a fingertip_photos column.
+    // It is no longer read or written; new fingerprint data lives in
+    // fingerprint_templates.
+    if (!columns.some((column) => column.name === "fingerprint_templates")) {
       await database.execAsync(
-        "ALTER TABLE user_profiles ADD COLUMN fingertip_photos TEXT NOT NULL DEFAULT '[]'"
+        "ALTER TABLE user_profiles ADD COLUMN fingerprint_templates TEXT NOT NULL DEFAULT '[]'"
       );
     }
     await migrateLegacyProfiles(database);
@@ -161,7 +164,7 @@ function toProfile(row: {
   photo_data_url: string | null;
   has_face_template: number;
   has_voice_template: number;
-  has_fingertip_photos: number;
+  has_fingerprint_templates: number;
   created_at: string;
 }): UserProfile {
   return {
@@ -174,7 +177,7 @@ function toProfile(row: {
     photoDataUrl: row.photo_data_url,
     hasFaceTemplate: row.has_face_template === 1,
     hasVoiceTemplate: row.has_voice_template === 1,
-    hasFingertipPhotos: row.has_fingertip_photos === 1,
+    hasFingerprintTemplates: row.has_fingerprint_templates === 1,
     createdAt: row.created_at,
   };
 }
@@ -183,18 +186,19 @@ const PROFILE_COLUMNS = `
   id, name, email, phone, organization, notes, photo_data_url,
   face_template IS NOT NULL AS has_face_template,
   voice_embedding IS NOT NULL AS has_voice_template,
-  CASE WHEN fingertip_photos IS NOT NULL AND fingertip_photos != '[]'
-    THEN 1 ELSE 0 END AS has_fingertip_photos,
+  CASE WHEN fingerprint_templates IS NOT NULL AND fingerprint_templates != '[]'
+    THEN 1 ELSE 0 END AS has_fingerprint_templates,
   created_at
 `;
 
-function isFingertipPhoto(value: unknown): value is FingertipPhoto {
+function isFingerprintTemplate(value: unknown): value is FingerprintTemplate {
   if (typeof value !== "object" || value === null) return false;
   if (
     !("fingerId" in value) ||
-    !("dataBase64" in value) ||
+    !("minutiae" in value) ||
     !("width" in value) ||
     !("height" in value) ||
+    !("quality" in value) ||
     !("capturedAt" in value)
   ) {
     return false;
@@ -202,39 +206,42 @@ function isFingertipPhoto(value: unknown): value is FingertipPhoto {
   return (
     typeof value.fingerId === "string" &&
     FINGERTIP_FINGERS.some((finger) => finger.id === value.fingerId) &&
-    typeof value.dataBase64 === "string" &&
-    /^[A-Za-z0-9+/]+={0,2}$/.test(value.dataBase64) &&
+    Array.isArray(value.minutiae) &&
+    value.minutiae.length > 0 &&
+    value.minutiae.length % 3 === 0 &&
+    value.minutiae.every((item) => typeof item === "number" && Number.isFinite(item)) &&
     typeof value.width === "number" &&
     Number.isInteger(value.width) &&
     value.width > 0 &&
     typeof value.height === "number" &&
     Number.isInteger(value.height) &&
     value.height > 0 &&
+    typeof value.quality === "number" &&
     typeof value.capturedAt === "string" &&
     Number.isFinite(Date.parse(value.capturedAt))
   );
 }
 
-function parseFingertipPhotos(serialized: string | null): FingertipPhoto[] {
+function parseFingerprintTemplates(serialized: string | null): FingerprintTemplate[] {
   if (serialized === null) return [];
   const parsed: unknown = JSON.parse(serialized);
   if (!Array.isArray(parsed)) {
-    throw new Error("The saved fingertip photo data is invalid.");
+    throw new Error("The saved fingerprint data is invalid.");
   }
 
-  const photos: FingertipPhoto[] = [];
-  const capturedFingers = new Set<string>();
+  const templates: FingerprintTemplate[] = [];
+  const seen = new Set<string>();
   for (const value of parsed) {
-    if (!isFingertipPhoto(value) || capturedFingers.has(value.fingerId)) {
-      throw new Error("The saved fingertip photo data is invalid.");
+    if (!isFingerprintTemplate(value) || seen.has(value.fingerId)) {
+      throw new Error("The saved fingerprint data is invalid.");
     }
-    capturedFingers.add(value.fingerId);
-    photos.push(value);
+    seen.add(value.fingerId);
+    templates.push(value);
   }
-  if (photos.length !== 0 && photos.length !== FINGERTIP_FINGERS.length) {
-    throw new Error("The saved fingertip photo data is incomplete.");
+  if (templates.length !== 0 && templates.length !== FINGERTIP_FINGERS.length) {
+    throw new Error("The saved fingerprint data is incomplete.");
   }
-  return photos;
+  return templates;
 }
 
 export async function listProfiles(): Promise<UserProfile[]> {
@@ -265,29 +272,29 @@ export async function searchProfiles(searchText: string): Promise<UserProfile[]>
 
 export async function createProfile(profile: NewUserProfile): Promise<UserProfile> {
   const database = await openDatabase();
-  const { faceTemplate, voiceEmbedding, fingertipPhotos, ...details } = profile;
+  const { faceTemplate, voiceEmbedding, fingerprintTemplates, ...details } = profile;
   if (
-    fingertipPhotos.length !== FINGERTIP_FINGERS.length ||
-    fingertipPhotos.some((photo) => !isFingertipPhoto(photo)) ||
+    fingerprintTemplates.length !== FINGERTIP_FINGERS.length ||
+    fingerprintTemplates.some((template) => !isFingerprintTemplate(template)) ||
     FINGERTIP_FINGERS.some(
-      (finger) => !fingertipPhotos.some((photo) => photo.fingerId === finger.id)
+      (finger) => !fingerprintTemplates.some((template) => template.fingerId === finger.id)
     )
   ) {
-    throw new Error("Capture one fingertip photo for each of the ten fingers.");
+    throw new Error("Capture a fingerprint template for each of the ten fingers.");
   }
   const created: UserProfile = {
     ...details,
     id: Crypto.randomUUID(),
     hasFaceTemplate: faceTemplate.byteLength > 0,
     hasVoiceTemplate: voiceEmbedding.length > 0,
-    hasFingertipPhotos: fingertipPhotos.length > 0,
+    hasFingerprintTemplates: fingerprintTemplates.length > 0,
     createdAt: new Date().toISOString(),
   };
 
   await database.runAsync(
     `INSERT INTO user_profiles
       (id, name, email, phone, organization, notes, photo_data_url,
-       face_template, voice_embedding, fingertip_photos, created_at)
+       face_template, voice_embedding, fingerprint_templates, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     created.id,
     created.name,
@@ -298,7 +305,7 @@ export async function createProfile(profile: NewUserProfile): Promise<UserProfil
     created.photoDataUrl,
     faceTemplate,
     JSON.stringify(voiceEmbedding),
-    JSON.stringify(fingertipPhotos),
+    JSON.stringify(fingerprintTemplates),
     created.createdAt
   );
   return created;
@@ -311,9 +318,9 @@ export async function getProfileBiometrics(
   const row = await database.getFirstAsync<{
     face_template: Uint8Array | null;
     voice_embedding: string | null;
-    fingertip_photos: string | null;
+    fingerprint_templates: string | null;
   }>(
-    "SELECT face_template, voice_embedding, fingertip_photos FROM user_profiles WHERE id = ?",
+    "SELECT face_template, voice_embedding, fingerprint_templates FROM user_profiles WHERE id = ?",
     id
   );
   if (!row) throw new Error("The selected profile no longer exists.");
@@ -331,11 +338,11 @@ export async function getProfileBiometrics(
     voiceEmbedding = parsed;
   }
 
-  const fingertipPhotos = parseFingertipPhotos(row.fingertip_photos);
+  const fingerprintTemplates = parseFingerprintTemplates(row.fingerprint_templates);
   return {
     faceTemplate: row.face_template,
     voiceEmbedding,
-    fingertipPhotos,
+    fingerprintTemplates,
   };
 }
 

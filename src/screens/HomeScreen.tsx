@@ -57,7 +57,7 @@ export function HomeScreen({
             A secure home for your people.
           </Text>
           <Text className="mt-2 max-w-[270px] text-sm leading-5 text-white/75">
-            Manage local profiles and explore on-device face and voice matching.
+            Manage local profiles and explore on-device face, voice and fingerprint matching.
           </Text>
           <View className="mt-4 flex-row items-center">
             <Ionicons name="shield-checkmark-outline" size={15} color="#BEE9D2" />
@@ -171,7 +171,7 @@ export function HomeScreen({
           <View className="ml-3 flex-1">
             <Text className="text-sm font-bold text-ink">Local biometrics, private by design</Text>
             <Text className="mt-1 text-xs leading-4 text-muted">
-              Templates and demo fingertip photos are encrypted locally. Fingertip photos do not authenticate.
+              Face, voice and fingerprint templates are encrypted locally on this device.
             </Text>
           </View>
         </View>

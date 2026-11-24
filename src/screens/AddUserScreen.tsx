@@ -6,9 +6,10 @@ import { Field, Notice, Page, PrimaryButton } from "../components/UI";
 import { FaceCaptureScreen } from "./FaceCaptureScreen";
 import { VoiceCaptureScreen } from "./VoiceCaptureScreen";
 import { FingertipCaptureScreen } from "./FingertipCaptureScreen";
+import { PhotoCropScreen } from "./PhotoCropScreen";
 import {
   FINGERTIP_FINGERS,
-  type FingertipPhoto,
+  type FingerprintTemplate,
   type NewUserProfile,
 } from "../types";
 
@@ -27,16 +28,40 @@ export function AddUserScreen({
   const [photoDataUrl, setPhotoDataUrl] = useState<string | null>(null);
   const [consent, setConsent] = useState(false);
   const [captureStep, setCaptureStep] = useState<
-    "details" | "face" | "voice" | "fingertips"
+    "details" | "crop" | "face" | "voice" | "fingertips"
   >("details");
+  const [pendingPhoto, setPendingPhoto] = useState<{
+    uri: string;
+    width: number;
+    height: number;
+  } | null>(null);
   const [faceTemplate, setFaceTemplate] = useState<Uint8Array | null>(null);
   const [voiceEmbedding, setVoiceEmbedding] = useState<number[] | null>(null);
-  const [fingertipPhotos, setFingertipPhotos] = useState<FingertipPhoto[]>([]);
+  const [fingerprintTemplates, setFingerprintTemplates] = useState<FingerprintTemplate[]>([]);
   const [saving, setSaving] = useState(false);
   const biometricsReady =
     Boolean(faceTemplate) &&
     Boolean(voiceEmbedding) &&
-    fingertipPhotos.length === FINGERTIP_FINGERS.length;
+    fingerprintTemplates.length === FINGERTIP_FINGERS.length;
+
+  if (captureStep === "crop" && pendingPhoto) {
+    return (
+      <PhotoCropScreen
+        uri={pendingPhoto.uri}
+        width={pendingPhoto.width}
+        height={pendingPhoto.height}
+        onCancel={() => {
+          setPendingPhoto(null);
+          setCaptureStep("details");
+        }}
+        onConfirm={(dataUrl) => {
+          setPhotoDataUrl(dataUrl);
+          setPendingPhoto(null);
+          setCaptureStep("details");
+        }}
+      />
+    );
+  }
 
   if (captureStep === "face") {
     return (
@@ -67,8 +92,9 @@ export function AddUserScreen({
   if (captureStep === "fingertips") {
     return (
       <FingertipCaptureScreen
-        onComplete={(photos) => {
-          setFingertipPhotos(photos);
+        mode="enroll"
+        onComplete={(templates) => {
+          setFingerprintTemplates(templates);
           setCaptureStep("details");
         }}
         onCancel={() => setCaptureStep("details")}
@@ -87,21 +113,21 @@ export function AddUserScreen({
         return;
       }
 
+      // Cropping happens in our own screen, not the system editor.
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ["images"],
-        allowsEditing: true,
-        aspect: [1, 1],
-        quality: 0.65,
-        base64: true,
+        allowsEditing: false,
+        quality: 1,
       });
 
       if (!result.canceled) {
         const image = result.assets[0];
-        if (!image.base64) {
+        if (!image.width || !image.height) {
           Alert.alert("Photo unavailable", "The selected photo could not be read. Please choose another.");
           return;
         }
-        setPhotoDataUrl(`data:${image.mimeType ?? "image/jpeg"};base64,${image.base64}`);
+        setPendingPhoto({ uri: image.uri, width: image.width, height: image.height });
+        setCaptureStep("crop");
       }
     } catch (error) {
       Alert.alert(
@@ -130,10 +156,10 @@ export function AddUserScreen({
       return;
     }
 
-    if (!faceTemplate || !voiceEmbedding || fingertipPhotos.length !== FINGERTIP_FINGERS.length) {
+    if (!faceTemplate || !voiceEmbedding || fingerprintTemplates.length !== FINGERTIP_FINGERS.length) {
       Alert.alert(
         "Biometric enrollment required",
-        "Capture the face and voice templates and all ten fingertip demo photos before saving this profile."
+        "Capture the face, voice and all ten fingerprint templates before saving this profile."
       );
       return;
     }
@@ -149,7 +175,7 @@ export function AddUserScreen({
         photoDataUrl,
         faceTemplate,
         voiceEmbedding,
-        fingertipPhotos,
+        fingerprintTemplates,
       });
     } catch (error) {
       Alert.alert(
@@ -173,7 +199,7 @@ export function AddUserScreen({
         </Pressable>
         <Text className="text-2xl font-extrabold text-ink">Add a user</Text>
         <Text className="mt-2 text-sm leading-5 text-muted">
-          Add contact details, then create on-device face and voice templates and ten fingertip demo photos.
+          Add contact details, then create on-device face, voice and fingerprint templates.
         </Text>
 
         <View className="my-6 items-center">
@@ -221,8 +247,8 @@ export function AddUserScreen({
           <Text className="text-sm font-bold text-ink">Biometric enrollment</Text>
           <Text className="mt-1 text-xs leading-5 text-muted">
             {biometricsReady
-              ? "Face and voice templates and all ten fingertip demo photos are ready."
-              : "Complete face and voice enrollment and capture all ten demo fingertip photos."}
+              ? "Face, voice and all ten fingerprint templates are ready."
+              : "Complete face, voice and fingerprint enrollment."}
           </Text>
           <View className="mt-4 flex-row items-center">
             <Ionicons
@@ -252,15 +278,15 @@ export function AddUserScreen({
           </View>
           <View className="mt-3 flex-row items-center">
             <Ionicons
-              name={fingertipPhotos.length === FINGERTIP_FINGERS.length ? "checkmark-circle" : "ellipse-outline"}
+              name={fingerprintTemplates.length === FINGERTIP_FINGERS.length ? "checkmark-circle" : "ellipse-outline"}
               size={19}
-              color={fingertipPhotos.length === FINGERTIP_FINGERS.length ? "#176B57" : "#9AA49F"}
+              color={fingerprintTemplates.length === FINGERTIP_FINGERS.length ? "#176B57" : "#9AA49F"}
             />
             <Text className="ml-2 flex-1 text-sm font-medium text-ink">
-              Fingertip demo photos {fingertipPhotos.length === FINGERTIP_FINGERS.length ? "captured" : "not captured"}
+              Fingerprint templates {fingerprintTemplates.length === FINGERTIP_FINGERS.length ? "captured" : "not captured"}
             </Text>
-            {fingertipPhotos.length > 0 ? (
-              <Text className="text-xs text-muted">{fingertipPhotos.length}/10 photos</Text>
+            {fingerprintTemplates.length > 0 ? (
+              <Text className="text-xs text-muted">{fingerprintTemplates.length}/10 fingers</Text>
             ) : null}
           </View>
           <View className="mt-4">
@@ -272,21 +298,21 @@ export function AddUserScreen({
                     ? "Start face enrollment"
                     : !voiceEmbedding
                       ? "Continue with voice"
-                      : "Continue with fingertip photos"
+                      : "Continue with fingerprints"
               }
               icon={biometricsReady ? "refresh" : "scan-outline"}
               onPress={() => {
                 if (!consent) {
                   Alert.alert(
                     "Consent required",
-                    "Confirm consent to on-device biometric processing and local fingertip photo storage before enrollment."
+                    "Confirm consent to on-device biometric processing and local fingerprint template storage before enrollment."
                   );
                   return;
                 }
                 if (biometricsReady) {
                   setFaceTemplate(null);
                   setVoiceEmbedding(null);
-                  setFingertipPhotos([]);
+                  setFingerprintTemplates([]);
                 }
                 setCaptureStep(
                   !faceTemplate
@@ -313,14 +339,14 @@ export function AddUserScreen({
             color={consent ? "#176B57" : "#72807C"}
           />
           <Text className="ml-3 flex-1 text-xs leading-5 text-muted">
-            I have permission to enroll this person and consent to processing their live face frames and voice sample on this device, and to storing one camera photo for each fingertip in the encrypted profile database. Fingertip photos are not fingerprint templates and are not used for authentication. No data is uploaded; the local JSON preview includes sensitive biometric data, and copying it places that data on the clipboard.
+            I have permission to enroll this person and consent to processing their live face frames, voice sample and fingertip camera images on this device, and to storing the resulting face, voice and fingerprint templates in the encrypted profile database. Camera frames and recordings are not saved. No data is uploaded; the local JSON preview includes sensitive biometric data, and copying it places that data on the clipboard.
           </Text>
         </Pressable>
 
         <Notice icon="lock-closed-outline">
           <Text className="text-sm font-bold text-ink">Stored privately on this device</Text>
           <Text className="mt-1 text-sm leading-5 text-muted">
-            Profile details, face template, voice embedding, and compressed fingertip demo photos are saved in the encrypted local database. Face frames and voice recordings are processed on device and are not saved. Nothing is sent to an API.
+            Profile details and the face, voice and fingerprint templates are saved in the encrypted local database. Face frames, voice recordings and fingertip images are processed on device and are not saved. Nothing is sent to an API.
           </Text>
         </Notice>
         <View className="mt-6">

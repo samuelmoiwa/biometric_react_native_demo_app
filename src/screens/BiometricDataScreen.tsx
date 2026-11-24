@@ -24,7 +24,7 @@ export function BiometricDataScreen({
   function confirmCopy() {
     Alert.alert(
       "Copy sensitive biometric data?",
-      "This copies the full JSON payload, including face and voice templates and fingertip photos, to the device clipboard. Anyone with clipboard access may be able to read it. Nothing will be uploaded.",
+      "This copies the full JSON payload, including face, voice and fingerprint templates, to the device clipboard. Anyone with clipboard access may be able to read it. Nothing will be uploaded.",
       [
         { text: "Cancel", style: "cancel" },
         {
@@ -76,7 +76,7 @@ export function BiometricDataScreen({
           <Notice icon="warning-outline" tone="amber">
             <Text className="text-sm font-bold text-ink">Sensitive data — preview only</Text>
             <Text className="mt-1 text-sm leading-5 text-muted">
-              No backend endpoint or API contract is configured. The face value is an opaque module-specific template, not a standardized interchange format. Camera photos are explicitly demo-only and cannot authenticate fingerprints.
+              No backend endpoint or API contract is configured. The face value is an opaque module-specific template, not a standardized interchange format. The fingerprint value is an app-specific minutiae template read from camera images, not an ISO or ANSI interchange format.
             </Text>
           </Notice>
         </View>
