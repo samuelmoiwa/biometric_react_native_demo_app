@@ -155,7 +155,7 @@ export function FingertipCaptureScreen(props: Props) {
   const busyRef = useRef(false);
   const retakeRef = useRef(false);
   const completedRef = useRef(false);
-  const handlerRef = useRef<(buffer: ArrayBuffer, count: number) => Promise<void>>(
+  const handlerRef = useRef<(cropBytes: number[], count: number) => Promise<void>>(
     async () => undefined
   );
 
@@ -212,20 +212,23 @@ export function FingertipCaptureScreen(props: Props) {
     setCameraError(message);
   }, []);
 
-  const onCaptured = useCallback((buffer: ArrayBuffer, count: number) => {
-    void handlerRef.current(buffer, count);
+  const onCaptured = useCallback((cropBytes: number[], count: number) => {
+    void handlerRef.current(cropBytes, count);
   }, []);
 
-  async function handleCapture(buffer: ArrayBuffer, count: number) {
+  async function handleCapture(cropBytes: number[], count: number) {
     if (busyRef.current || completedRef.current) return;
     busyRef.current = true;
     setProcessing(true);
     setError(null);
     try {
-      const gray = new Uint8Array(buffer);
+      // Allow React to pause <Camera isActive={false}> and free CameraX DirectByteBuffers
+      // before allocating Float32/Float64 buffers inside extractTemplate.
+      await new Promise<void>((resolve) => setTimeout(resolve, 60));
+
+      const gray = Uint8Array.from(cropBytes);
       const extractions: ReturnType<typeof extractTemplate>[] = [];
       for (let i = 0; i < count; i++) {
-        // Yield so the UI can paint between fingers.
         await new Promise<void>((resolve) => setTimeout(resolve, 16));
         extractions.push(extractTemplate(gray.subarray(i * CROP_SIZE, (i + 1) * CROP_SIZE)));
       }
@@ -296,7 +299,8 @@ export function FingertipCaptureScreen(props: Props) {
   handlerRef.current = handleCapture;
 
   const frameOutput = useFrameOutput({
-    targetResolution: { width: 1920, height: 1080 },
+    // 720p cuts CameraX RGBA DirectByteBuffer allocation from 8.3 MB down to 3.6 MB per frame
+    targetResolution: { width: 1280, height: 720 },
     pixelFormat: "rgb",
     enablePhysicalBufferRotation: true,
     dropFramesWhileBusy: true,
@@ -412,7 +416,6 @@ export function FingertipCaptureScreen(props: Props) {
           eng = { stable: 0, prev: [], window: [], times: [] };
           progress.value = 0;
           state = 0;
-          // Draw the frames of whatever was found so the user can see why it is red.
           for (let i = 0; i < fingers.length; i++) rects.push({ x: fingers[i].left, y: fingers[i].tipY, w: 0, h: 0 });
         }
 
@@ -434,12 +437,13 @@ export function FingertipCaptureScreen(props: Props) {
         boxes.value = drawn;
 
         if (captureNow) {
+          // Lock immediately on the worklet thread so no further frames are processed
+          config.value = { expected: cfg.expected, active: false };
           const out = new Uint8Array(CROP_SIZE * fingers.length);
           for (let i = 0; i < fingers.length; i++) {
             extractCrop(data, stride, fw, fh, rects[i], out, i * CROP_SIZE);
           }
-          config.value = { expected: cfg.expected, active: false };
-          scheduleOnRN(onCaptured, out.buffer, fingers.length);
+          scheduleOnRN(onCaptured, Array.from(out), fingers.length);
         }
 
         if (status !== lastStatus.value || now - lastReport.value > 350) {
@@ -634,7 +638,7 @@ export function FingertipCaptureScreen(props: Props) {
               <Camera
                 style={{ position: "absolute", top: 0, right: 0, bottom: 0, left: 0 }}
                 device={device}
-                isActive
+                isActive={!processing && flash === null}
                 outputs={[frameOutput]}
                 onError={(e) => setCameraError(e.message)}
               />

@@ -243,6 +243,22 @@ export function AddUserScreen({
           textAlignVertical="top"
         />
 
+        <Pressable
+          accessibilityRole="checkbox"
+          accessibilityState={{ checked: consent }}
+          onPress={() => setConsent((current) => !current)}
+          className="mb-4 flex-row items-start rounded-2xl border border-line bg-white p-4"
+        >
+          <Ionicons
+            name={consent ? "checkbox" : "square-outline"}
+            size={21}
+            color={consent ? "#176B57" : "#72807C"}
+          />
+          <Text className="ml-3 flex-1 text-xs leading-5 text-muted">
+            I have permission to enroll this person and consent to processing their live face frames, voice sample and fingertip camera images on this device, and to storing the resulting face, voice and fingerprint templates in the encrypted profile database. Camera frames and recordings are not saved. No data is uploaded; the local JSON preview includes sensitive biometric data, and copying it places that data on the clipboard.
+          </Text>
+        </Pressable>
+
         <View className="mb-4 rounded-2xl border border-line bg-white p-4">
           <Text className="text-sm font-bold text-ink">Biometric enrollment</Text>
           <Text className="mt-1 text-xs leading-5 text-muted">
@@ -327,21 +343,7 @@ export function AddUserScreen({
           </View>
         </View>
 
-        <Pressable
-          accessibilityRole="checkbox"
-          accessibilityState={{ checked: consent }}
-          onPress={() => setConsent((current) => !current)}
-          className="mb-4 flex-row items-start rounded-2xl border border-line bg-white p-4"
-        >
-          <Ionicons
-            name={consent ? "checkbox" : "square-outline"}
-            size={21}
-            color={consent ? "#176B57" : "#72807C"}
-          />
-          <Text className="ml-3 flex-1 text-xs leading-5 text-muted">
-            I have permission to enroll this person and consent to processing their live face frames, voice sample and fingertip camera images on this device, and to storing the resulting face, voice and fingerprint templates in the encrypted profile database. Camera frames and recordings are not saved. No data is uploaded; the local JSON preview includes sensitive biometric data, and copying it places that data on the clipboard.
-          </Text>
-        </Pressable>
+
 
         <Notice icon="lock-closed-outline">
           <Text className="text-sm font-bold text-ink">Stored privately on this device</Text>
