@@ -195,7 +195,7 @@ export function AddUserScreen({
           <Text className="mt-1 text-xs text-muted">Choose an image from your photo library</Text>
         </View>
 
-        <Field label="Full name *" value={name} onChangeText={setName} placeholder="e.g. Alex Morgan" autoCapitalize="words" />
+        <Field label="Full name *" value={name} onChangeText={setName} placeholder="e.g. Alex Kamara" autoCapitalize="words" />
         <Field
           label="Email address *"
           value={email}
@@ -205,7 +205,7 @@ export function AddUserScreen({
           autoCapitalize="none"
           autoCorrect={false}
         />
-        <Field label="Phone number *" value={phone} onChangeText={setPhone} placeholder="+1 (555) 000-0000" keyboardType="phone-pad" />
+        <Field label="Phone number *" value={phone} onChangeText={setPhone} placeholder="+232 (00) 000-000" keyboardType="phone-pad" />
         <Field label="Organization" value={organization} onChangeText={setOrganization} placeholder="Company or team" />
         <Field
           label="Notes"
