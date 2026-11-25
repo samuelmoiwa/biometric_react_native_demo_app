@@ -28,7 +28,9 @@ import {
   isPulse,
   LIVE_MIN_SAMPLES,
   LIVE_WINDOW_MS,
+  NO_ANGLE,
   padRect,
+  type PadRect,
   verifyFingerprints,
 } from "../biometrics/fingerprint";
 import {
@@ -54,18 +56,38 @@ type Props =
 /** Show pulse / focus numbers under the status line while tuning thresholds. */
 const SHOW_DEBUG = true;
 
-type Box = { x: number; y: number; w: number; h: number; state: number };
+/**
+ * Frames are NOT physically rotated (that allocates an extra full frame per
+ * frame on Android and ran the app out of memory). The detector rotates
+ * coordinates itself using frame.orientation. If the finger frames look
+ * rotated or the hand is never found, try 1, 2 or 3 here.
+ */
+const ROTATION_OFFSET = 0;
+
+/**
+ * Camera stream size. 1920x1080 keeps enough ridge detail for fingerprints.
+ * With physical rotation off, each frame is ~8 MB; if a low-memory phone still
+ * runs out of memory, drop to 1280x720 (less accurate, about a third of the memory).
+ */
+const FRAME_SIZE = { width: 1920, height: 1080 };
+
+/** One wireframe: centre, size and rotation (radians) in view pixels. */
+type Box = { cx: number; cy: number; w: number; h: number; rot: number; state: number };
 type Engine = {
   stable: number;
   prev: number[];
   window: number[][];
   times: number[];
+  /** Direction the fingers point (radians), or NO_ANGLE when not known yet. */
+  angle: number;
+  /** Frames in a row without a usable detection. */
+  lost: number;
 };
 
 const COLORS = ["#FF4D4F", "#FFC247", "#2DD36F"];
 
 function makeEngine(): Engine {
-  return { stable: 0, prev: [], window: [], times: [] };
+  return { stable: 0, prev: [], window: [], times: [], angle: NO_ANGLE, lost: 0 };
 }
 
 function getErrorMessage(error: unknown): string {
@@ -76,12 +98,12 @@ function messageFor(status: string, expected: number): string {
   switch (status) {
     case "noHand":
       return expected > 1
-        ? "Hold four fingers together, pointing up, pads facing the camera."
-        : "Hold your thumb up with the pad facing the camera.";
+        ? "Show four fingers together, pads facing the camera, in any direction."
+        : "Show one thumb with the pad facing the camera, in any direction.";
     case "wrongCount":
       return expected > 1
-        ? "Show exactly four fingers, pointing up, with the tips visible."
-        : "Show only one thumb, pointing up.";
+        ? "Show exactly four fingers with the tips visible."
+        : "Show only one thumb.";
     case "tooFar":
       return "Move closer so the fingertips fill the frame.";
     case "tooClose":
@@ -112,10 +134,11 @@ function FingerFrame({ index, boxes }: { index: number; boxes: SharedValue<Box[]
     const color = box.state === 2 ? "#2DD36F" : box.state === 1 ? "#FFC247" : "#FF4D4F";
     return {
       opacity: 1,
-      left: box.x,
-      top: box.y,
+      left: box.cx - box.w / 2,
+      top: box.cy - box.h / 2,
       width: box.w,
       height: box.h,
+      transform: [{ rotate: `${box.rot}rad` }],
       borderColor: color,
       backgroundColor: `${color}22`,
       borderTopLeftRadius: box.w / 2,
@@ -222,13 +245,12 @@ export function FingertipCaptureScreen(props: Props) {
     setProcessing(true);
     setError(null);
     try {
-      // Allow React to pause <Camera isActive={false}> and free CameraX DirectByteBuffers
-      // before allocating Float32/Float64 buffers inside extractTemplate.
-      await new Promise<void>((resolve) => setTimeout(resolve, 60));
-
+      // The camera is paused while we work (see isActive below), so no new
+      // frames are allocated during ridge extraction.
       const gray = Uint8Array.from(cropBytes);
       const extractions: ReturnType<typeof extractTemplate>[] = [];
       for (let i = 0; i < count; i++) {
+        // Yield so the UI can paint between fingers.
         await new Promise<void>((resolve) => setTimeout(resolve, 16));
         extractions.push(extractTemplate(gray.subarray(i * CROP_SIZE, (i + 1) * CROP_SIZE)));
       }
@@ -298,11 +320,10 @@ export function FingertipCaptureScreen(props: Props) {
   }
   handlerRef.current = handleCapture;
 
-  const frameOutput = useFrameOutput({
-    // 720p cuts CameraX RGBA DirectByteBuffer allocation from 8.3 MB down to 3.6 MB per frame
-    targetResolution: { width: 1280, height: 720 },
+ const frameOutput = useFrameOutput({
+    targetResolution: FRAME_SIZE,
     pixelFormat: "rgb",
-    enablePhysicalBufferRotation: true,
+    enablePhysicalBufferRotation: false,
     dropFramesWhileBusy: true,
     onFrame(frame) {
       "worklet";
@@ -312,11 +333,17 @@ export function FingertipCaptureScreen(props: Props) {
 
         const now = Date.now();
         const data = new Uint8Array(frame.getPixelBuffer());
-        const fw = frame.width;
-        const fh = frame.height;
+        const sw = frame.width;
+        const sh = frame.height;
         const stride = frame.bytesPerRow;
         const bgra = String(frame.pixelFormat).indexOf("bgra") >= 0;
-        const detection = detectFingers(data, fw, fh, stride, bgra, cfg.expected);
+        const orientation = String(frame.orientation);
+        const baseRot = orientation === "right" ? 1 : orientation === "down" ? 2 : orientation === "left" ? 3 : 0;
+        const rot = (baseRot + ROTATION_OFFSET) % 4;
+        // Upright frame size, used for the overlay mapping.
+        const fw = rot % 2 === 1 ? sh : sw;
+        const fh = rot % 2 === 1 ? sw : sh;
+        const detection = detectFingers(data, sw, sh, stride, bgra, cfg.expected, rot, engine.value.angle);
         const fingers = detection.fingers;
 
         const vs = viewSize.value;
@@ -330,28 +357,35 @@ export function FingertipCaptureScreen(props: Props) {
         let focusMin = 0;
         let eng = engine.value;
         let captureNow = false;
-        let rects: { x: number; y: number; w: number; h: number }[] = [];
+        let rects: PadRect[] = [];
 
         if (detection.status === "ok") {
-          rects = fingers.map((f) => padRect(f));
+          rects = fingers.map((f) => padRect(f, detection.dirX, detection.dirY));
           const current: number[] = [];
           let movement = 0;
           for (let i = 0; i < fingers.length; i++) {
             const f = fingers[i];
-            const cx = (f.left + f.right) / 2;
-            current.push(cx, f.tipY);
+            current.push(f.tipX, f.tipY);
             if (eng.prev.length === fingers.length * 2) {
-              const m = (Math.abs(cx - eng.prev[i * 2]) + Math.abs(f.tipY - eng.prev[i * 2 + 1])) / f.width;
+              const dx = f.tipX - eng.prev[i * 2];
+              const dy = f.tipY - eng.prev[i * 2 + 1];
+              const m = Math.sqrt(dx * dx + dy * dy) / f.width;
               if (m > movement) movement = m;
             } else {
               movement = 1;
             }
           }
+          // Turning the hand counts as movement too.
+          if (eng.angle < 900) {
+            let turn = Math.abs(detection.angle - eng.angle);
+            if (turn > Math.PI) turn = 2 * Math.PI - turn;
+            if (turn * 0.4 > movement) movement = turn * 0.4;
+          }
 
           if (movement > 0.05) {
             const empty: number[][] = [];
             for (let i = 0; i < fingers.length; i++) empty.push([]);
-            eng = { stable: 0, prev: current, window: empty, times: [] };
+            eng = { stable: 0, prev: current, window: empty, times: [], angle: detection.angle, lost: 0 };
             status = "moving";
             state = 1;
           } else {
@@ -363,7 +397,7 @@ export function FingertipCaptureScreen(props: Props) {
             focusMin = 1e9;
             const nextWindow: number[][] = [];
             for (let i = 0; i < fingers.length; i++) {
-              const metrics = fingerMetrics(data, stride, fw, fh, rects[i]);
+              const metrics = fingerMetrics(data, stride, sw, sh, rot, rects[i]);
               const series = windowValues[i].slice();
               series.push(metrics.mean);
               nextWindow.push(series);
@@ -376,7 +410,14 @@ export function FingertipCaptureScreen(props: Props) {
               times.shift();
               for (let i = 0; i < nextWindow.length; i++) nextWindow[i].shift();
             }
-            eng = { stable: eng.stable + 1, prev: current, window: nextWindow, times };
+            eng = {
+              stable: eng.stable + 1,
+              prev: current,
+              window: nextWindow,
+              times,
+              angle: detection.angle,
+              lost: 0,
+            };
 
             const elapsed = times[times.length - 1] - times[0];
             progress.value = Math.min(1, elapsed / LIVE_WINDOW_MS);
@@ -413,10 +454,18 @@ export function FingertipCaptureScreen(props: Props) {
             }
           }
         } else {
-          eng = { stable: 0, prev: [], window: [], times: [] };
+          // Keep the last direction for a few frames, then search all angles again.
+          const lost = eng.lost + 1;
+          eng = {
+            stable: 0,
+            prev: [],
+            window: [],
+            times: [],
+            angle: lost >= 5 ? NO_ANGLE : eng.angle,
+            lost,
+          };
           progress.value = 0;
           state = 0;
-          for (let i = 0; i < fingers.length; i++) rects.push({ x: fingers[i].left, y: fingers[i].tipY, w: 0, h: 0 });
         }
 
         engine.value = eng;
@@ -425,11 +474,15 @@ export function FingertipCaptureScreen(props: Props) {
         if (vs.w > 0) {
           for (let i = 0; i < fingers.length; i++) {
             const f = fingers[i];
+            // The wireframe runs from just above the tip to 1.25 widths down the finger.
+            const centreX = f.tipX + detection.dirX * 0.585 * f.width;
+            const centreY = f.tipY + detection.dirY * 0.585 * f.width;
             drawn.push({
-              x: f.left * scale + ox,
-              y: (f.tipY - 0.04 * f.width) * scale + oy,
+              cx: centreX * scale + ox,
+              cy: centreY * scale + oy,
               w: f.width * scale,
               h: 1.25 * f.width * scale,
+              rot: Math.atan2(-detection.dirX, detection.dirY),
               state,
             });
           }
@@ -437,12 +490,13 @@ export function FingertipCaptureScreen(props: Props) {
         boxes.value = drawn;
 
         if (captureNow) {
-          // Lock immediately on the worklet thread so no further frames are processed
+          // Lock first so no further frame can trigger a second capture.
           config.value = { expected: cfg.expected, active: false };
           const out = new Uint8Array(CROP_SIZE * fingers.length);
           for (let i = 0; i < fingers.length; i++) {
-            extractCrop(data, stride, fw, fh, rects[i], out, i * CROP_SIZE);
+            extractCrop(data, stride, sw, sh, rot, rects[i], out, i * CROP_SIZE);
           }
+          // Plain array: slower than an ArrayBuffer but known to work here.
           scheduleOnRN(onCaptured, Array.from(out), fingers.length);
         }
 
@@ -452,6 +506,9 @@ export function FingertipCaptureScreen(props: Props) {
           scheduleOnRN(onStatus, status, state, snr, focusMin === 1e9 ? 0 : focusMin);
         }
       } catch (frameError) {
+        // If the capture lock was taken and then something threw, unlock so the
+        // screen does not freeze.
+        config.value = { expected: config.value.expected, active: true };
         if (!errorSent.value) {
           errorSent.value = true;
           scheduleOnRN(
@@ -701,8 +758,9 @@ export function FingertipCaptureScreen(props: Props) {
             <Notice icon="information-circle-outline" tone="amber">
               <Text className="text-sm font-bold text-ink">Tips for a good read</Text>
               <Text className="mt-1 text-sm leading-5 text-muted">
-                Keep fingers together, pointing up, pads facing the camera, about 10 to 15 cm away so the tips fill the
-                width. Use bright, even light, clean dry fingers, and hold still for about three seconds.
+                Keep fingers together with the pads facing the camera, about 10 to 15 cm away. Any direction works
+                (sideways, upside down or at an angle); the frames follow your fingers. Use bright, even light, clean dry
+                fingers, and hold still for about three seconds.
               </Text>
             </Notice>
           </View>

@@ -45,9 +45,39 @@ const GRID = 8;
 /* Frame-thread helpers (all marked 'worklet')                          */
 /* ------------------------------------------------------------------ */
 
+/**
+ * Frames arrive in the sensor's native orientation (no physical rotation, which
+ * would allocate a full extra frame buffer per frame on Android). `rot` is the
+ * number of clockwise quarter turns that turns the stored pixels upright:
+ * 0 = up, 1 = right, 2 = down, 3 = left. All coordinates used by the detector
+ * and by callers are "upright" coordinates; these two helpers map an upright
+ * point back to the stored pixel.
+ */
+export function srcX(u: number, v: number, rot: number, sw: number, _sh: number): number {
+  "worklet";
+  if (rot === 0) return u;
+  if (rot === 1) return v;
+  if (rot === 2) return sw - 1 - u;
+  return sw - 1 - v;
+}
+
+export function srcY(u: number, v: number, rot: number, _sw: number, sh: number): number {
+  "worklet";
+  if (rot === 0) return v;
+  if (rot === 1) return sh - 1 - u;
+  if (rot === 2) return sh - 1 - v;
+  return u;
+}
+
+/** Pass as the angle hint when the hand direction is not known yet. */
+export const NO_ANGLE = 999;
+
+/**
+ * One finger. `tipX/tipY` is the centre of the fingertip in upright frame
+ * pixels, `width` its width in pixels. The direction the fingers point is
+ * shared by the whole hand (see Detection).
+ */
 export type DetectedFinger = {
-  left: number;
-  right: number;
   tipX: number;
   tipY: number;
   width: number;
@@ -62,23 +92,328 @@ export type DetectionStatus =
 
 export type Detection = {
   status: DetectionStatus;
+  /** Ordered across the hand, from the hand's left to its right. */
   fingers: DetectedFinger[];
+  /** Direction the fingers point, as a clockwise angle from "up" in radians. */
+  angle: number;
+  /** Unit vector from the fingertips towards the palm (frame pixels, y down). */
+  dirX: number;
+  dirY: number;
 };
 
+/** A rotated rectangle over one fingertip pad, in upright frame pixels. */
+export type PadRect = {
+  ox: number;
+  oy: number;
+  rx: number;
+  ry: number;
+  dx: number;
+  dy: number;
+  w: number;
+  h: number;
+};
+
+const DEG = Math.PI / 180;
+
+function valleyIndex(sm: Float32Array, a: number, b: number): number {
+  "worklet";
+  let vv = -1;
+  for (let x = a; x <= b; x++) if (sm[x] > vv) vv = sm[x];
+  let first = a;
+  let last = b;
+  for (let x = a; x <= b; x++) {
+    if (sm[x] >= vv - 1e-6) {
+      first = x;
+      break;
+    }
+  }
+  for (let x = b; x >= a; x--) {
+    if (sm[x] >= vv - 1e-6) {
+      last = x;
+      break;
+    }
+  }
+  return Math.round((first + last) / 2);
+}
+
+/** Resamples the hand mask into a grid rotated by `phi` (hand "up" = grid up). */
+function rotateBlob(
+  blob: Uint8Array,
+  gw: number,
+  gh: number,
+  cx: number,
+  cy: number,
+  D: number,
+  phi: number,
+  occ: Uint8Array
+): void {
+  "worklet";
+  const c = Math.cos(phi);
+  const s = Math.sin(phi);
+  const half = D / 2;
+  for (let j = 0; j < D; j++) {
+    const v = j - half + 0.5;
+    let sx = cx + (-half + 0.5) * c - v * s;
+    let sy = cy + (-half + 0.5) * s + v * c;
+    const row = j * D;
+    for (let i = 0; i < D; i++) {
+      const ix = Math.floor(sx);
+      const iy = Math.floor(sy);
+      occ[row + i] = ix >= 0 && iy >= 0 && ix < gw && iy < gh ? blob[iy * gw + ix] : 0;
+      sx += c;
+      sy += s;
+    }
+  }
+}
+
+/** Fingertips = local minima of the upper contour of the rotated mask. */
+function findTips(
+  occ: Uint8Array,
+  D: number,
+  expected: number
+): { peaks: number[]; sm: Float32Array } {
+  "worklet";
+  const top = new Float32Array(D);
+  let xmin = D;
+  let xmax = -1;
+  for (let x = 0; x < D; x++) {
+    top[x] = D;
+    for (let y = 0; y < D - 1; y++) {
+      if (occ[y * D + x] && occ[(y + 1) * D + x]) {
+        top[x] = y;
+        break;
+      }
+    }
+    if (top[x] < D) {
+      if (x < xmin) xmin = x;
+      if (x > xmax) xmax = x;
+    }
+  }
+  const sm = new Float32Array(D);
+  const peaks: number[] = [];
+  if (xmax < 0) return { peaks, sm: top };
+  for (let x = 0; x < D; x++) {
+    const a = x > 0 ? top[x - 1] : D;
+    const b = x < D - 1 ? top[x + 1] : D;
+    sm[x] = (a + 2 * top[x] + b) / 4;
+  }
+
+  const R = 5;
+  for (let x = xmin; x <= xmax; x++) {
+    const v = sm[x];
+    if (v >= D - 1) continue;
+    let ok = true;
+    for (let k = 1; k <= R && ok; k++) {
+      if (x - k >= 0 && sm[x - k] <= v) ok = false;
+      if (x + k < D && sm[x + k] < v) ok = false;
+    }
+    if (ok) peaks.push(x);
+  }
+  // Rounded tips have a flat apex: use the middle of it.
+  for (let k = 0; k < peaks.length; k++) {
+    const v = sm[peaks[k]];
+    let l = peaks[k];
+    let r = peaks[k];
+    while (l > 0 && sm[l - 1] <= v + 0.75) l--;
+    while (r < D - 1 && sm[r + 1] <= v + 0.75) r++;
+    peaks[k] = Math.round((l + r) / 2);
+  }
+  // Merge tips that are not separated by a real notch.
+  let merged = true;
+  while (merged && peaks.length > 1) {
+    merged = false;
+    for (let k = 0; k < peaks.length - 1; k++) {
+      const a = peaks[k];
+      const b = peaks[k + 1];
+      const v = valleyIndex(sm, a, b);
+      if (Math.min(sm[v] - sm[a], sm[v] - sm[b]) < 3) {
+        peaks.splice(sm[a] <= sm[b] ? k + 1 : k, 1);
+        merged = true;
+        break;
+      }
+    }
+  }
+  // Drop clearly lower tips (for example the thumb next to four fingers).
+  while (peaks.length > expected && peaks.length > 1) {
+    let minTop = D;
+    let worst = 0;
+    let worstValue = -1;
+    for (let k = 0; k < peaks.length; k++) {
+      const v = sm[peaks[k]];
+      if (v < minTop) minTop = v;
+      if (v > worstValue) {
+        worstValue = v;
+        worst = k;
+      }
+    }
+    const gaps: number[] = [];
+    for (let k = 0; k < peaks.length - 1; k++) gaps.push(peaks[k + 1] - peaks[k]);
+    gaps.sort((a, b) => a - b);
+    const spacing = gaps[Math.floor(gaps.length / 2)];
+    if (worstValue - minTop > 0.8 * spacing) peaks.splice(worst, 1);
+    else break;
+  }
+  return { peaks, sm };
+}
+
+/** How well the rotated mask looks like `expected` fingers pointing up. */
+function scoreMany(peaks: number[], sm: Float32Array, expected: number): number {
+  "worklet";
+  if (peaks.length !== expected) return -10 * Math.abs(peaks.length - expected);
+  let sum = 0;
+  for (let k = 0; k < peaks.length - 1; k++) {
+    const v = valleyIndex(sm, peaks[k], peaks[k + 1]);
+    sum += Math.min(25, Math.min(sm[v] - sm[peaks[k]], sm[v] - sm[peaks[k + 1]]));
+  }
+  return 100 + sum;
+}
+
 /**
- * Finds up to `expected` fingers (fingers pointing up, pads facing the camera)
- * in an RGBA/BGRA frame. Works on a coarse grid, so it is cheap enough to run
- * on every frame.
+ * For a single thumb every direction has one peak, so look instead for a narrow
+ * protruding tip that does not touch the edge of the frame.
+ */
+function scoreSingle(
+  occ: Uint8Array,
+  D: number,
+  cx: number,
+  cy: number,
+  phi: number,
+  gw: number,
+  gh: number
+): number {
+  "worklet";
+  let j0 = -1;
+  let l0 = 0;
+  let r0 = 0;
+  for (let j = 0; j < D - 1 && j0 < 0; j++) {
+    for (let i = 0; i < D; i++) {
+      if (occ[j * D + i] && occ[(j + 1) * D + i]) {
+        if (j0 < 0) {
+          j0 = j;
+          l0 = i;
+        }
+        r0 = i;
+      }
+    }
+  }
+  if (j0 < 0) return -2000;
+  let bottom = j0;
+  for (let j = D - 1; j > j0; j--) {
+    let any = false;
+    for (let i = 0; i < D; i++) {
+      if (occ[j * D + i]) {
+        any = true;
+        break;
+      }
+    }
+    if (any) {
+      bottom = j;
+      break;
+    }
+  }
+  const extent = bottom - j0;
+  const i0 = Math.round((l0 + r0) / 2);
+  const row = j0 + 14;
+  if (row >= D || !occ[row * D + i0] || extent < 20) return -1500;
+  let l = i0;
+  let r = i0;
+  while (l > 0 && occ[row * D + l - 1]) l--;
+  while (r < D - 1 && occ[row * D + r + 1]) r++;
+  const w14 = r - l + 1;
+  if (w14 < 8) return -1500;
+
+  // The far end (palm / wrist) is normally wider than the thumb tip.
+  let farWidth = 0;
+  const farRow = bottom - 14;
+  if (farRow > j0) {
+    for (let i = 0; i < D; i++) if (occ[farRow * D + i]) farWidth++;
+  }
+
+  const c = Math.cos(phi);
+  const s = Math.sin(phi);
+  const u = i0 - D / 2 + 0.5;
+  const v = j0 - D / 2;
+  const sx = cx + u * c - v * s;
+  const sy = cy + u * s + v * c;
+  if (sx < 2 || sy < 2 || sx > gw - 3 || sy > gh - 3) return -1000;
+  return -w14 + 0.1 * Math.min(extent, 60) + 0.5 * Math.max(-30, Math.min(30, farWidth - w14));
+}
+
+/**
+ * Re-aims a single finger along its own centre line: measures where the finger
+ * is centred a little below the tip and further down, and turns the grid to
+ * point along that line.
+ */
+function refineSingleAngle(
+  blob: Uint8Array,
+  gw: number,
+  gh: number,
+  cx: number,
+  cy: number,
+  D: number,
+  phi: number,
+  occ: Uint8Array
+): number {
+  "worklet";
+  rotateBlob(blob, gw, gh, cx, cy, D, phi, occ);
+  let j0 = -1;
+  let l0 = 0;
+  let r0 = 0;
+  for (let j = 0; j < D - 1 && j0 < 0; j++) {
+    for (let i = 0; i < D; i++) {
+      if (occ[j * D + i] && occ[(j + 1) * D + i]) {
+        if (j0 < 0) {
+          j0 = j;
+          l0 = i;
+        }
+        r0 = i;
+      }
+    }
+  }
+  if (j0 < 0) return phi;
+  const runCentre = (row: number, from: number): number => {
+    if (row >= D || !occ[row * D + from]) return -1;
+    let l = from;
+    let r = from;
+    while (l > 0 && occ[row * D + l - 1]) l--;
+    while (r < D - 1 && occ[row * D + r + 1]) r++;
+    return (l + r) / 2;
+  };
+  const rowA = j0 + 10;
+  const c1 = runCentre(rowA, Math.round((l0 + r0) / 2));
+  if (c1 < 0) return phi;
+  const rowB = rowA + 30;
+  const c2 = runCentre(rowB, Math.round(c1));
+  if (c2 < 0) return phi;
+  const du = c2 - c1;
+  const dv = rowB - rowA;
+  const c = Math.cos(phi);
+  const s = Math.sin(phi);
+  const ax = du * c - dv * s;
+  const ay = du * s + dv * c;
+  return Math.atan2(-ax, ay);
+}
+
+/**
+ * Finds up to `expected` fingers in an RGBA/BGRA frame, whichever way the hand
+ * points (up, sideways, upside down or any angle in between). `hint` is the
+ * previous direction (radians) or NO_ANGLE; with a hint only nearby angles are
+ * tried first, which keeps tracking cheap.
  */
 export function detectFingers(
   data: Uint8Array,
-  width: number,
-  height: number,
+  sw: number,
+  sh: number,
   stride: number,
   bgra: boolean,
-  expected: number
+  expected: number,
+  rot: number,
+  hint: number
 ): Detection {
   "worklet";
+  const width = rot % 2 === 1 ? sh : sw;
+  const height = rot % 2 === 1 ? sw : sh;
+  const none: Detection = { status: "noHand", fingers: [], angle: 0, dirX: 0, dirY: 1 };
   const gw = Math.floor(width / GRID);
   const gh = Math.floor(height / GRID);
   const cells = gw * gh;
@@ -87,9 +422,10 @@ export function detectFingers(
   const bo = bgra ? 0 : 2;
 
   for (let gy = 0; gy < gh; gy++) {
-    const rowBase = (gy * GRID + GRID / 2) * stride;
+    const v = gy * GRID + GRID / 2;
     for (let gx = 0; gx < gw; gx++) {
-      const p = rowBase + (gx * GRID + GRID / 2) * 4;
+      const u = gx * GRID + GRID / 2;
+      const p = srcY(u, v, rot, sw, sh) * stride + srcX(u, v, rot, sw, sh) * 4;
       const r = data[p + ro];
       const g = data[p + 1];
       const b = data[p + bo];
@@ -102,8 +438,8 @@ export function detectFingers(
     }
   }
 
-  // Connected components (4-neighbour). Keep every component that is big
-  // enough relative to the largest one, so separated fingers still count.
+  // Connected components; keep every one that is big enough relative to the
+  // largest, so separated fingers still count.
   const visited = new Uint8Array(cells);
   const stack = new Int32Array(cells);
   const starts: number[] = [];
@@ -141,7 +477,7 @@ export function detectFingers(
     areas.push(area);
     if (area > largest) largest = area;
   }
-  if (largest < cells * 0.04) return { status: "noHand", fingers: [] };
+  if (largest < cells * 0.04) return none;
 
   const blob = new Uint8Array(cells);
   for (let k = 0; k < starts.length; k++) {
@@ -172,170 +508,149 @@ export function detectFingers(
     }
   }
 
-  // Upper contour of the hand: for each column, the first row that is skin.
-  const top = new Float32Array(gw);
-  let xmin = gw;
-  let xmax = -1;
-  for (let x = 0; x < gw; x++) {
-    top[x] = gh;
-    for (let y = 0; y < gh - 1; y++) {
-      if (blob[y * gw + x] && blob[(y + 1) * gw + x]) {
-        top[x] = y;
-        break;
-      }
-    }
-    if (top[x] < gh) {
-      if (x < xmin) xmin = x;
-      if (x > xmax) xmax = x;
+  // Bounding box of the hand -> size of the rotated work grid.
+  let bx0 = gw;
+  let bx1 = -1;
+  let by0 = gh;
+  let by1 = -1;
+  for (let y = 0; y < gh; y++) {
+    for (let x = 0; x < gw; x++) {
+      if (!blob[y * gw + x]) continue;
+      if (x < bx0) bx0 = x;
+      if (x > bx1) bx1 = x;
+      if (y < by0) by0 = y;
+      if (y > by1) by1 = y;
     }
   }
-  if (xmax < 0) return { status: "noHand", fingers: [] };
+  if (bx1 < 0) return none;
+  const cx = (bx0 + bx1 + 1) / 2;
+  const cy = (by0 + by1 + 1) / 2;
+  const D = Math.ceil(Math.sqrt((bx1 - bx0 + 1) ** 2 + (by1 - by0 + 1) ** 2)) + 4;
+  const occ = new Uint8Array(D * D);
 
-  const sm = new Float32Array(gw);
-  for (let x = 0; x < gw; x++) {
-    const a = x > 0 ? top[x - 1] : gh;
-    const b = x < gw - 1 ? top[x + 1] : gh;
-    sm[x] = (a + 2 * top[x] + b) / 4;
-  }
-
-  // Fingertips are the local minima of the contour (smallest y).
-  const R = 5;
-  const peaks: number[] = [];
-  for (let x = xmin; x <= xmax; x++) {
-    const v = sm[x];
-    if (v >= gh - 1) continue;
-    let ok = true;
-    for (let k = 1; k <= R && ok; k++) {
-      if (x - k >= 0 && sm[x - k] <= v) ok = false;
-      if (x + k < gw && sm[x + k] < v) ok = false;
-    }
-    if (ok) peaks.push(x);
-  }
-
-  // Rounded tips have a flat apex: use the middle of it, not its left edge.
-  for (let k = 0; k < peaks.length; k++) {
-    const v = sm[peaks[k]];
-    let l = peaks[k];
-    let r2 = peaks[k];
-    while (l > 0 && sm[l - 1] <= v + 0.75) l--;
-    while (r2 < gw - 1 && sm[r2 + 1] <= v + 0.75) r2++;
-    peaks[k] = Math.round((l + r2) / 2);
-  }
-
-  const valleyBetween = (a: number, b: number): number => {
-    let vv = -1;
-    for (let x = a; x <= b; x++) if (sm[x] > vv) vv = sm[x];
-    let first = a;
-    let last = b;
-    for (let x = a; x <= b; x++) {
-      if (sm[x] >= vv - 1e-6) {
-        first = x;
-        break;
-      }
-    }
-    for (let x = b; x >= a; x--) {
-      if (sm[x] >= vv - 1e-6) {
-        last = x;
-        break;
-      }
-    }
-    return Math.round((first + last) / 2);
+  const evalAngle = (phi: number): number => {
+    rotateBlob(blob, gw, gh, cx, cy, D, phi, occ);
+    if (expected === 1) return scoreSingle(occ, D, cx, cy, phi, gw, gh);
+    const t = findTips(occ, D, expected);
+    return scoreMany(t.peaks, t.sm, expected);
   };
+  const good = expected === 1 ? -500 : 100;
 
-  // Merge tips that are not separated by a real notch.
-  let merged = true;
-  while (merged && peaks.length > 1) {
-    merged = false;
-    for (let k = 0; k < peaks.length - 1; k++) {
-      const a = peaks[k];
-      const b = peaks[k + 1];
-      const v = valleyBetween(a, b);
-      const prominence = Math.min(sm[v] - sm[a], sm[v] - sm[b]);
-      if (prominence < 3) {
-        peaks.splice(sm[a] <= sm[b] ? k + 1 : k, 1);
-        merged = true;
-        break;
+  let bestPhi = 0;
+  let bestScore = -1e9;
+  if (hint < 900) {
+    for (let k = -8; k <= 8; k++) {
+      const phi = hint + k * 2.5 * DEG;
+      const sc = evalAngle(phi);
+      if (sc > bestScore) {
+        bestScore = sc;
+        bestPhi = phi;
+      }
+    }
+  }
+  if (bestScore < good) {
+    // Full search: every 15 degrees, then refine around the best.
+    for (let k = 0; k < 24; k++) {
+      const phi = (k * 15 - 180) * DEG;
+      const sc = evalAngle(phi);
+      if (sc > bestScore) {
+        bestScore = sc;
+        bestPhi = phi;
+      }
+    }
+    const centre = bestPhi;
+    for (let k = -4; k <= 4; k++) {
+      if (k === 0) continue;
+      const phi = centre + k * 2.5 * DEG;
+      const sc = evalAngle(phi);
+      if (sc > bestScore) {
+        bestScore = sc;
+        bestPhi = phi;
       }
     }
   }
 
-  // Drop clearly lower tips (for example the thumb next to four fingers).
-  while (peaks.length > expected && peaks.length > 1) {
-    let minTop = gh;
-    let worst = 0;
-    let worstValue = -1;
-    for (let k = 0; k < peaks.length; k++) {
-      const v = sm[peaks[k]];
-      if (v < minTop) minTop = v;
-      if (v > worstValue) {
-        worstValue = v;
-        worst = k;
-      }
-    }
-    const gaps: number[] = [];
-    for (let k = 0; k < peaks.length - 1; k++) gaps.push(peaks[k + 1] - peaks[k]);
-    gaps.sort((a, b) => a - b);
-    const spacing = gaps[Math.floor(gaps.length / 2)];
-    if (worstValue - minTop > 0.8 * spacing) peaks.splice(worst, 1);
-    else break;
+  let phi = bestPhi;
+  if (expected === 1) {
+    phi = refineSingleAngle(blob, gw, gh, cx, cy, D, phi, occ);
+    phi = refineSingleAngle(blob, gw, gh, cx, cy, D, phi, occ);
   }
-
+  rotateBlob(blob, gw, gh, cx, cy, D, phi, occ);
+  const tips = findTips(occ, D, expected);
+  const peaks = tips.peaks;
+  const sm = tips.sm;
   const n = peaks.length;
-  if (n === 0) return { status: "noHand", fingers: [] };
+  const c = Math.cos(phi);
+  const s = Math.sin(phi);
+  const dirX = -s;
+  const dirY = c;
+  if (n === 0) return { status: "noHand", fingers: [], angle: phi, dirX, dirY };
 
+  const half = D / 2;
   const edges: number[] = new Array(n + 1);
-  let cutOff = false;
   if (n === 1) {
     const px = peaks[0];
-    const row = Math.min(gh - 1, Math.round(sm[px]) + 14);
+    const row = Math.min(D - 1, Math.round(sm[px]) + 14);
     let l = px;
     let r = px;
-    while (l > 0 && blob[row * gw + l - 1]) l--;
-    while (r < gw - 1 && blob[row * gw + r + 1]) r++;
+    while (l > 0 && occ[row * D + l - 1]) l--;
+    while (r < D - 1 && occ[row * D + r + 1]) r++;
     edges[0] = l;
     edges[1] = r + 1;
   } else {
-    for (let k = 1; k < n; k++) edges[k] = valleyBetween(peaks[k - 1], peaks[k]);
-    const e0 = peaks[0] - (edges[1] - peaks[0]);
-    const en = peaks[n - 1] + (peaks[n - 1] - edges[n - 1]);
-    if (e0 < 0 || en > gw) cutOff = true;
-    edges[0] = Math.max(0, e0);
-    edges[n] = Math.min(gw, en);
+    for (let k = 1; k < n; k++) edges[k] = valleyIndex(sm, peaks[k - 1], peaks[k]);
+    edges[0] = peaks[0] - (edges[1] - peaks[0]);
+    edges[n] = peaks[n - 1] + (peaks[n - 1] - edges[n - 1]);
   }
 
   const fingers: DetectedFinger[] = [];
   let widthSum = 0;
-  let lowest = 0;
+  let outside = false;
   for (let i = 0; i < n; i++) {
-    const left = edges[i] * GRID;
-    const right = edges[i + 1] * GRID;
-    const w = right - left;
-    const tipY = sm[peaks[i]] * GRID;
-    fingers.push({ left, right, tipX: peaks[i] * GRID + GRID / 2, tipY, width: w });
+    const u = (edges[i] + edges[i + 1]) / 2 - half;
+    const v = sm[peaks[i]] - half;
+    const w = (edges[i + 1] - edges[i]) * GRID;
+    const tipX = (cx + u * c - v * s) * GRID;
+    const tipY = (cy + u * s + v * c) * GRID;
+    fingers.push({ tipX, tipY, width: w });
     widthSum += w;
-    if (tipY + 1.25 * w > lowest) lowest = tipY + 1.25 * w;
+    // Corners of the wireframe rectangle must stay inside the frame.
+    for (let ca = -1; ca <= 1; ca += 2) {
+      for (let cb = 0; cb < 2; cb++) {
+        const a = 0.5 * ca * w;
+        const b = (cb === 0 ? -0.04 : 1.25) * w;
+        const x = tipX + c * a - s * b;
+        const y = tipY + s * a + c * b;
+        if (x < 2 || y < 2 || x > width - 2 || y > height - 2) outside = true;
+      }
+    }
   }
   const avg = widthSum / n;
-
-  if (n !== expected) return { status: "wrongCount", fingers };
-  if (avg < MIN_FINGER_PX) return { status: "tooFar", fingers };
+  const base = { fingers, angle: phi, dirX, dirY };
+  if (n !== expected) return { status: "wrongCount", ...base };
+  if (avg < MIN_FINGER_PX) return { status: "tooFar", ...base };
+  const span = Math.abs(c) * width + Math.abs(s) * height;
   const maxFrac = expected > 1 ? 0.3 : 0.6;
-  if (avg > maxFrac * width || cutOff || lowest > height) {
-    return { status: "tooClose", fingers };
-  }
-  return { status: "ok", fingers };
+  if (avg > maxFrac * span || outside) return { status: "tooClose", ...base };
+  return { status: "ok", ...base };
 }
 
-/** Rectangle (frame pixels) of the distal pad that is cut out for one finger. */
-export function padRect(f: DetectedFinger): {
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-} {
+/** Rotated rectangle (upright frame pixels) of the distal pad of one finger. */
+export function padRect(f: DetectedFinger, dirX: number, dirY: number): PadRect {
   "worklet";
+  const rx = dirY;
+  const ry = -dirX;
   const w = f.width * 0.84;
-  return { x: f.left + f.width * 0.08, y: f.tipY + f.width * 0.06, w, h: (w * CROP_H) / CROP_W };
+  return {
+    ox: f.tipX - rx * (w / 2) + dirX * 0.06 * f.width,
+    oy: f.tipY - ry * (w / 2) + dirY * 0.06 * f.width,
+    rx,
+    ry,
+    dx: dirX,
+    dy: dirY,
+    w,
+    h: (w * CROP_H) / CROP_W,
+  };
 }
 
 /**
@@ -345,36 +660,42 @@ export function padRect(f: DetectedFinger): {
 export function fingerMetrics(
   data: Uint8Array,
   stride: number,
-  width: number,
-  height: number,
-  rect: { x: number; y: number; w: number; h: number }
+  sw: number,
+  sh: number,
+  rot: number,
+  pad: PadRect
 ): { mean: number; focus: number } {
   "worklet";
-  const x0 = Math.max(2, Math.floor(rect.x));
-  const y0 = Math.max(2, Math.floor(rect.y));
-  const x1 = Math.min(width - 3, Math.floor(rect.x + rect.w));
-  const y1 = Math.min(height - 3, Math.floor(rect.y + rect.h));
-  if (x1 <= x0 + 8 || y1 <= y0 + 8) return { mean: 0, focus: 0 };
-
-  const step = Math.max(2, Math.floor((x1 - x0) / 64));
+  const uw = rot % 2 === 1 ? sh : sw;
+  const uh = rot % 2 === 1 ? sw : sh;
+  const nA = 48;
+  const nB = 58;
   let sum = 0;
   let count = 0;
-  for (let y = y0; y < y1; y += step) {
-    const base = y * stride;
-    for (let x = x0; x < x1; x += step) {
-      sum += data[base + x * 4 + 1];
+  for (let j = 0; j < nB; j++) {
+    const b = ((j + 0.5) / nB) * pad.h;
+    for (let i = 0; i < nA; i++) {
+      const a = ((i + 0.5) / nA) * pad.w;
+      const x = Math.floor(pad.ox + pad.rx * a + pad.dx * b);
+      const y = Math.floor(pad.oy + pad.ry * a + pad.dy * b);
+      if (x < 0 || y < 0 || x >= uw || y >= uh) continue;
+      sum += data[srcY(x, y, rot, sw, sh) * stride + srcX(x, y, rot, sw, sh) * 4 + 1];
       count++;
     }
   }
-  const mean = count > 0 ? sum / count : 0;
+  if (count < nA * nB * 0.8) return { mean: 0, focus: 0 };
+  const mean = sum / count;
 
-  // Focus on a central 80x80 patch at full resolution.
-  const cx = Math.floor((x0 + x1) / 2);
-  const cy = Math.floor((y0 + y1) / 2);
-  const px0 = Math.max(2, cx - 40);
-  const py0 = Math.max(2, cy - 40);
-  const px1 = Math.min(width - 3, cx + 40);
-  const py1 = Math.min(height - 3, cy + 40);
+  // Focus on a central 80x80 patch at full resolution. Gradient energy does not
+  // depend on rotation, so the patch is read straight from the stored pixels.
+  const cu = Math.floor(pad.ox + pad.rx * (pad.w / 2) + pad.dx * (pad.h / 2));
+  const cv = Math.floor(pad.oy + pad.ry * (pad.w / 2) + pad.dy * (pad.h / 2));
+  const cxs = srcX(cu, cv, rot, sw, sh);
+  const cys = srcY(cu, cv, rot, sw, sh);
+  const px0 = Math.max(2, cxs - 40);
+  const py0 = Math.max(2, cys - 40);
+  const px1 = Math.min(sw - 3, cxs + 40);
+  const py1 = Math.min(sh - 3, cys + 40);
   let s = 0;
   let s2 = 0;
   let ge = 0;
@@ -383,11 +704,11 @@ export function fingerMetrics(
     const base = y * stride;
     for (let x = px0; x < px1; x++) {
       const i = base + x * 4 + 1;
-      const v = data[i];
+      const val = data[i];
       const gx = data[i + 4] - data[i - 4];
       const gy = data[i + stride] - data[i - stride];
-      s += v;
-      s2 += v * v;
+      s += val;
+      s2 += val * val;
       ge += gx * gx + gy * gy;
       m++;
     }
@@ -396,43 +717,63 @@ export function fingerMetrics(
   const mu = s / m;
   const variance = s2 / m - mu * mu;
   // gx/gy span two pixels, hence the 1/4.
-  const focus = (ge / m / 4) / (variance + 1);
-  return { mean, focus };
+  return { mean, focus: ge / m / 4 / (variance + 1) };
 }
 
 /**
- * Cuts a normalised grayscale (green channel) crop of one fingertip pad out of
- * the frame, resampled to CROP_W x CROP_H.
+ * Cuts a grayscale (green channel) crop of one fingertip pad out of the frame,
+ * resampled to CROP_W x CROP_H. The crop is always "finger up", whatever the
+ * angle of the hand in the camera image.
  */
 export function extractCrop(
   data: Uint8Array,
   stride: number,
-  width: number,
-  height: number,
-  rect: { x: number; y: number; w: number; h: number },
+  sw: number,
+  sh: number,
+  rot: number,
+  pad: PadRect,
   out: Uint8Array,
   offset: number
 ): void {
   "worklet";
-  const sx = rect.w / CROP_W;
-  const sy = rect.h / CROP_H;
+  const uw = rot % 2 === 1 ? sh : sw;
+  const uh = rot % 2 === 1 ? sw : sh;
+  const stepX = pad.w / CROP_W;
+  const stepY = pad.h / CROP_H;
   for (let oy = 0; oy < CROP_H; oy++) {
-    let fy = rect.y + (oy + 0.5) * sy - 0.5;
-    if (fy < 0) fy = 0;
-    if (fy > height - 2) fy = height - 2;
-    const y0 = Math.floor(fy);
-    const ty = fy - y0;
-    const r0 = y0 * stride;
-    const r1 = r0 + stride;
+    const b = (oy + 0.5) * stepY;
     for (let ox = 0; ox < CROP_W; ox++) {
-      let fx = rect.x + (ox + 0.5) * sx - 0.5;
+      const a = (ox + 0.5) * stepX;
+      let fx = pad.ox + pad.rx * a + pad.dx * b;
+      let fy = pad.oy + pad.ry * a + pad.dy * b;
       if (fx < 0) fx = 0;
-      if (fx > width - 2) fx = width - 2;
-      const x0 = Math.floor(fx);
-      const tx = fx - x0;
-      const i = x0 * 4 + 1;
-      const top = data[r0 + i] * (1 - tx) + data[r0 + i + 4] * tx;
-      const bottom = data[r1 + i] * (1 - tx) + data[r1 + i + 4] * tx;
+      if (fy < 0) fy = 0;
+      if (fx > uw - 1.001) fx = uw - 1.001;
+      if (fy > uh - 1.001) fy = uh - 1.001;
+      // Upright (fx, fy) -> stored pixel position.
+      let px = fx;
+      let py = fy;
+      if (rot === 1) {
+        px = fy;
+        py = sh - 1 - fx;
+      } else if (rot === 2) {
+        px = sw - 1 - fx;
+        py = sh - 1 - fy;
+      } else if (rot === 3) {
+        px = sw - 1 - fy;
+        py = fx;
+      }
+      if (px < 0) px = 0;
+      if (py < 0) py = 0;
+      if (px > sw - 1.001) px = sw - 1.001;
+      if (py > sh - 1.001) py = sh - 1.001;
+      const x0 = Math.floor(px);
+      const y0 = Math.floor(py);
+      const tx = px - x0;
+      const ty = py - y0;
+      const i = y0 * stride + x0 * 4 + 1;
+      const top = data[i] * (1 - tx) + data[i + 4] * tx;
+      const bottom = data[i + stride] * (1 - tx) + data[i + stride + 4] * tx;
       out[offset + oy * CROP_W + ox] = top * (1 - ty) + bottom * ty;
     }
   }
