@@ -8,7 +8,7 @@
     "ios": {
       "supportsTablet": true,
       "infoPlist": {
-        "NSCameraUsageDescription": "Capture live face frames and demo fingertip photos. Fingertip photos are not used to verify identity.",
+        "NSCameraUsageDescription": "Capture live face frames and fingertip images to create and verify on-device face and fingerprint templates.",
         "NSMicrophoneUsageDescription": "Record a short voice sample to create and verify an on-device voice template."
       },
       "bundleIdentifier": "com.samuelmoiwa.biomaticdemoapp"
@@ -33,7 +33,8 @@
           "android": {
             "buildArchs": [
               "arm64-v8a"
-            ]
+            ],
+            "extraProguardRules": "-keep class com.facerecognizer.** { *; }\n-keep class ai.onnxruntime.** { *; }\n-keep class com.k2fsa.sherpa.onnx.** { *; }\n-keep class net.siteed.sherpaonnx.** { *; }\n-keep class com.margelo.nitro.** { *; }\n-keep class com.mrousavy.camera.** { *; }\n-keep class com.swmansion.worklets.** { *; }\n-keep class com.swmansion.reanimated.** { *; }"
           }
         }
       ],
@@ -60,7 +61,7 @@
         "expo-image-picker",
         {
           "photosPermission": "Choose a profile picture to save with a demo user profile.",
-          "cameraPermission": "Capture live face frames and demo fingertip photos. Fingertip photos are not used to verify identity.",
+          "cameraPermission": "Capture live face frames and fingertip images to create and verify on-device face and fingerprint templates.",
           "microphonePermission": "Record a short voice sample to create and verify an on-device voice template."
         }
       ],
